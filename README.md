@@ -4,7 +4,7 @@ A plugin for the [Nera](https://github.com/seebaermichi/nera) static site genera
 
 📖 **Documentation:** [nera.js.org](https://nera.js.org)
 
-> **Not published yet.** The plugin is feature-complete and field-tested; the npm release is the last step in [`ROADMAP.md`](./ROADMAP.md). It requires `@nera-static/core` **4.13.0 or later**.
+> Requires `@nera-static/core` **4.13.0 or later** (see [Compatibility](#compatibility)).
 
 ## ✨ Features
 

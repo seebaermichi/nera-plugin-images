@@ -5,21 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-10-09
 
 ### Added
 
--   Repository scaffold: package metadata, fleet lint/test/publish setup, and
-    a test-time fixture generator (`test/fixtures/make-images.js`). No plugin
-    behaviour yet; see `ROADMAP.md` for the plan
--   Image engine (not wired into any hook yet): config loading with
-    per-key validation (`src/config.js`), URL → source file resolution over
-    the site and theme assets (`src/resolve-source.js`), variant planning and
-    the sharp encode pipeline (`src/transform.js`), the variant cache with
-    manifest and pruning (`src/cache.js`), a bounded, de-duplicating encode
-    queue (`src/queue.js`) and the generator that ties them together
-    (`src/generate.js`)
--   The plugin itself: `getMetaData` rewrites every local raster image in the
+-   First release. Requires `@nera-static/core` 4.13.0 or later (the
+    `getAssets` hook) and Node.js 20.18.1 or later
+-   `getMetaData` rewrites every local raster image in the
     rendered pages to `<picture>` markup with AVIF/WebP `<source>`s, a
     `srcset`/`sizes` fallback `<img>` with intrinsic `width`/`height`, and
     lazy loading (the first image on a page eager, with
@@ -29,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     version is read from the site first, so a symlinked plugin (`npm link`,
     an install by path) cannot hide the site's older core behind its own
     development copy
+-   Encoding with sharp: EXIF orientation applied, all metadata (EXIF, GPS,
+    ICC) stripped, colours converted to sRGB, widths never upscaled. Variants
+    are cached in `.nera-cache/images/` (config `cache_dir`) with stable,
+    content-hashed file names, so a warm build encodes nothing; variants no
+    longer used are pruned (`prune: true`). Encodes run in parallel, bounded
+    by `concurrency`
 -   Per-image options as query parameters on the image URL
     (`![alt](/images/a.jpg?w=800&ratio=16:9)`): `w`, `h`, `ratio`, `fit`,
     `focus` (percent or `attention`/`entropy`), `q`, `formats`, `sizes`,
