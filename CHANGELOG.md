@@ -25,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     lazy loading (the first image on a page eager, with
     `fetchpriority="high"`). `getAssets` (core >= 4.13.0) prunes the cache and
     hands the variants to core for `public/<output_path>`. The build fails
-    with a clear message when core is too old to call `getAssets`
+    with a clear message when core is too old to call `getAssets`. Core's
+    version is read from the site first, so a symlinked plugin (`npm link`,
+    an install by path) cannot hide the site's older core behind its own
+    development copy
 -   Per-image options as query parameters on the image URL
     (`![alt](/images/a.jpg?w=800&ratio=16:9)`): `w`, `h`, `ratio`, `fit`,
     `focus` (percent or `attention`/`entropy`), `q`, `formats`, `sizes`,
@@ -55,3 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     from the region the variants show, and are cached in the manifest. Images
     that are not fully opaque get none. Inline styles need `'unsafe-inline'`
     in a strict CSP's `style-src`
+-   README: installation, before/after markup, configuration reference,
+    query parameters, captions, frontmatter images and the mixin, `og:image`,
+    placeholders and CSP, keeping originals off the server with
+    `.neraignore`, and caching `.nera-cache` in CI

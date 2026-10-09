@@ -33,13 +33,17 @@ export function satisfies(version, required = REQUIRED_CORE) {
  * The version of `@nera-static/core` this build most likely runs on, or
  * `null` when it cannot be found.
  *
- * Resolved from the plugin's own location first (in a site, both live in the
- * site's `node_modules`), then from the site root.
+ * Resolved from the site root first: that is the core `nera` loads. Only
+ * when the site has none is it resolved from the plugin's own location. The
+ * plugin's location alone is not enough: Node resolves a symlinked plugin
+ * (`npm install ../nera-plugin-images`, `npm link`) from its real path, where
+ * its own devDependency core would answer for the site's (found in the
+ * slice 7 field test, decided 2026-10-09).
  *
  * @param {string} [cwd]
  */
 export function coreVersion(cwd = process.cwd()) {
-    const bases = [import.meta.url, path.join(cwd, 'package.json')]
+    const bases = [path.join(cwd, 'package.json'), import.meta.url]
     for (const base of bases) {
         try {
             return createRequire(base)('@nera-static/core/package.json').version

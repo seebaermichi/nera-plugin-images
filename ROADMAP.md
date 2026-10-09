@@ -159,6 +159,7 @@ The plugin reads sources from `app.folders.assets` **regardless of `.neraignore`
 - `peerDependencies: { "@nera-static/core": ">=4.13.0" }`. npm reports an incompatible core at install time.
 - Runtime safety net: in `getMetaData`, after generating, set a flag. If core is older and never calls `getAssets`, pages would reference missing files. Detect this by checking core's version via `@nera-static/core/package.json` (exported) and **fail loudly** (throw with a message naming the required version) rather than shipping broken image URLs.
 - *Refined 2026-10-09 (slice 3, agreed with the user):* the check runs at the first image that will actually be generated, **before** anything is encoded, not after. A site with no processable image still builds on an older core. An undeterminable core version warns and builds.
+- *Refined 2026-10-09 (slice 7, agreed with the user):* core's version is resolved from the **site root first**, and from the plugin's own location only when the site has no core. The slice 3 order (plugin first) was blind to the site's core whenever the plugin is symlinked: Node resolves it from its real path, where its own devDependency core answers.
 
 ### D13 — Concurrency and determinism
 - Encode with bounded concurrency (config `concurrency`, default `os.availableParallelism() - 1`, min 1) via a small internal queue (no extra dependency). The same source+params used on several pages is encoded once (in-flight promise map).
@@ -283,7 +284,7 @@ Pure modules, unit-tested in isolation:
 **Done 2026-10-09.** Content pass and hooks committed on `main`: 159 tests (41 new in `rewrite-html`, `guard`, `index` and `integration`), lint clean, green on Node 20.19, 20.20 and 22. A site with the plugin now gets `<picture>` markup and `public/_img/` end to end through core's real `run()`. Three points where D6/D12 left room were **decided with the user before implementing** and are written into D6/D12 above: the guard runs before encoding, "first image" means the first one rewritten, and the author's loading hints win. Everything else below fills gaps and does not contradict D1–D13:
 
 - **Module layout.** `src/rewrite-html.js` knows nothing about files or sharp. `rewriteHtml(html, { handle, outputPath, sizes, eagerFirst })` offers each candidate `<img>`'s `src` to an async `handle(src)`, which returns the generated image or `null` (leave as is). `buildPicture`/`imgAttributes` are the pure markup builders. `index.js` supplies `handle` (resolve → guard → `generate`). `src/guard.js` holds the D12 check (`coreVersion`, `satisfies`, `assertCoreVersion`), with no `semver` dependency.
-- **The D12 guard resolves `@nera-static/core/package.json` from the plugin's own location first, then from the site root** (`createRequire`). It throws on a known older version. An unresolvable core warns and passes, because some core is calling the plugin and refusing on a guess would block a working setup. Once it has failed, it re-throws for every later image of the build, so no concurrent image slips through to the encoder.
+- **The D12 guard resolves `@nera-static/core/package.json` from the plugin's own location first, then from the site root** (`createRequire`). *(Order reversed in slice 7: site root first. See D12 and the slice 7 note.)* It throws on a known older version. An unresolvable core warns and passes, because some core is calling the plugin and refusing on a guess would block a working setup. Once it has failed, it re-throws for every later image of the build, so no concurrent image slips through to the encoder.
 - **Markup details.** Attribute order on `<img>`: `src, srcset, sizes, width, height`, then the author's attributes in their original order (`alt`, `class`, `id`, `title`, `data-*`, …), then `loading`, `decoding`/`fetchpriority` (D13). An author's own `src`/`srcset`/`sizes`/`width`/`height` are replaced (D6). `<source>` carries `type, srcset, sizes`. With no modern format left (`formats: []`), the output is a bare `<img>` with `srcset` and **no `<picture>` wrapper** (the same shape D7 gives `formats=none`). A WebP source gets only an AVIF `<source>`, because its WebP set is the fallback (slice 2 note). Values are escaped by cheerio.
 - **Untouched pages keep their exact string.** cheerio re-serializes the whole fragment, which can normalize unrelated markup. `rewriteHtml` therefore returns the original string when nothing changed, and `getMetaData` returns the original page object, so pages without images are byte-identical. A removed `data-nera-skip` counts as a change.
 - **Warnings** name the page `href` and the URL as written: `image not found, left as is` for `missing`/`outside`, `could not process …, left as is (<sharp error>)` for an undecodable file. External, `data:`, SVG/GIF and empty `src` stay silent. Per-image errors are caught, so `getAssets` never throws because of one bad image (slice 1 note).
@@ -347,10 +348,62 @@ Pure modules, unit-tested in isolation:
 - **Slice 7:** the README needs the CSP note (D10), the transparency rule, and a hint that a placeholder is visible only while the image loads.
 
 ### Slice 7 — Field test + README
-- [ ] Field test against `../nera-websites/michael-becker-berlin.de` (blog images under `theme/assets/images/blog/2026/`, the ZerpenSafari example) with `npm install ../nera-plugin-images --no-save`. Record: cold build time, warm build time, `public/` size before/after, Lighthouse/LCP spot check of one blog post, `nera check` (validate output rules) still clean.
-- [ ] Also a `.neraignore` run (D11): confirm originals are absent from `public/` and no page references them.
-- [ ] Fix what the field test finds and record the numbers here.
-- [ ] README complete: what it does, before/after markup, config reference, query parameters, frontmatter + mixin, `.neraignore` privacy recipe, CI caching snippet (`actions/cache` for `.nera-cache`), CSP note for placeholders, requires core ≥ 4.13.0.
+- [x] Field test against `~/workspace/nera-websites/michael-becker-berlin.de` (`../../nera-websites/…` from this repo; blog images under `theme/assets/images/blog/2026/`, the ZerpenSafari example). The site is live: test on a throwaway `git clone` in a scratch folder, never in the site itself. Install with `npm install <path to this repo> --no-save` and load it through `plugins/images/index.js` (`export * from '@nera-static/plugin-images'`), because core only loads plugins listed in `dependencies`. Record: cold build time, warm build time, `public/` size before/after, Lighthouse/LCP spot check of one blog post, `nera check` (validate output rules) still clean.
+- [x] Also a `.neraignore` run (D11): confirm originals are absent from `public/` and no page references them.
+- [x] Fix what the field test finds and record the numbers here.
+- [x] README complete: what it does, before/after markup, config reference, query parameters, frontmatter + mixin, `.neraignore` privacy recipe, CI caching snippet (`actions/cache` for `.nera-cache`), CSP note for placeholders, requires core ≥ 4.13.0.
+
+**Done 2026-10-09.** Field test, one fix and the README committed on `main`: 264 tests (2 new in `guard`), lint clean. One fix changes a slice 3 decision and was **agreed with the user before implementing** (written into D12): the guard reads the site's core first. Everything else fills gaps and does not contradict D1–D13. The live site was not touched: a `git clone` in a scratch folder (with `.env`, `origin` removed so nothing could be pushed), deleted afterwards; `git status` in the site is unchanged.
+
+**Setup.** Apple M1 (8 cores, so `concurrency` 7), Node 22.22.0 (the site's `.nvmrc` and CI image), `@nera-static/nera` 1.3.0. The site pins core 4.12.0 through nera's `^4.12.0`; `npm update @nera-static/core` in the copy brought **4.14.0** (the current release). Note: `npm update`/`npm install` removes a `--no-save` package, so install the plugin after the core update. Timings are `nera build` alone (no Sass `prebuild`, no sitemap `postbuild`).
+
+**D12 guard on core 4.12.0 (found and fixed).** Installed by path, the plugin is a symlink, and Node resolves it from its real path. The guard's first lookup (the plugin's location) found the plugin's own devDependency core 4.13.0, so the build on the site's 4.12.0 passed with exit 0, and 12 pages linked to `/_img/` files that were never copied: exactly what D12 exists to stop. A registry install has no devDependencies, so it would have been caught, but `npm link`/path installs are how plugins are developed. `coreVersion` now tries the site root first and the plugin's location only as a fallback. Regression test: a temp site with core 4.12.0 must report 4.12.0 and throw. Rebuilt on 4.12.0, the copy now stops with the D12 message before encoding anything (no `.nera-cache` created).
+
+**Numbers (core 4.14.0).**
+
+| | without plugin | with plugin |
+|---|---|---|
+| `nera build`, cold | 1.6–1.8 s | 66 s best of 4 (80–185 s under load), **317–344 s CPU** |
+| `nera build`, warm | — | 2.0–2.5 s, 0 variants encoded |
+| `public/` | 21.8 MB, 242 files | 50.7 MB, 741 files (`_img/` 28.8 MB) |
+| `.nera-cache/` | — | 26.0 MB |
+| blog post, Lighthouse mobile | score 0.87/0.88, LCP 3.8/3.5 s, images 406 KiB | 0.93/0.96, LCP 2.6/2.6 s, images 195 KiB |
+| same, teaser via mixin + `eager_first: false` | — | 0.99/0.99, LCP 1.9/1.8 s, images 19 KiB |
+| `nera check` / `nera validate` | clean | clean |
+
+- **Wall times are unreliable here.** Other processes pushed the load average to 50–180 during the session, so the same cold build took 66, 107, 137 and 185 s. CPU time stayed at 317–344 s and is the number to compare. A CI runner with 2 cores would need several minutes for a cold build, so the GitLab cache matters (below).
+- **What was processed.** 104 images per build: 36 Markdown images (32 on the 12 rendered blog pages, 4 in drafts) and 68 frontmatter `image:` paths. 499 variants: 170 AVIF, 170 WebP, 62 JPEG, 97 PNG. Exactly the 12 blog pages with Markdown images changed. Every other page, including both home pages with the theme's hand-written `<picture>` elements, is byte-identical to the build without the plugin.
+- **Transfer.** The 32 content images: 4,261 KiB of originals, 449 KiB of AVIF a 390 px phone at 2× picks, 698 KiB at 1440 px. Largest single win: a 636 KB PNG screenshot → 21 KB. The ZerpenSafari phone photo: 258 KB → 42 KB.
+- **Metadata (D6).** 28 of the 52 raster originals carry EXIF (none with GPS). 0 of the 499 variants carry EXIF or ICC.
+- **Placeholders (D10).** A real blur data URI is 99–287 characters (median 111), well under D10's estimated 300–600 bytes; the README says ~100–300. Switching `placeholder` on a warm cache computed only the placeholders (0 variants, build 3.7 s). All 32 content images are opaque, so all got one.
+- **D4 mtime+size shortcut: not needed.** A warm build re-hashes every source and costs 0.2–0.9 s over the plugin-less build.
+- **Concurrency (slice 3 note): left as is.** Pages were processed concurrently (a pool of `concurrency` pages) as an experiment: identical output, same CPU time, wall 79 s against 66 s for the serial version. Under this load that says nothing either way, so the change was reverted. CPU use was ~4.8 of 8 cores, and `sharp.concurrency()` reports 4 here, so the limit is more likely libvips/libuv than page order. Re-measure on an idle machine if cold builds matter.
+- **PNG fallbacks dominate the disk.** The 97 PNG variants (fallbacks of PNG screenshots, lossless per slice 2) are 16.1 MB of `_img/`'s 28.8 MB, although nearly every browser takes the AVIF/WebP `<source>`. They cost upload and disk space, not visitor bandwidth. A config key for the fallback format would be a later **minor**; not done here.
+- **Drafts are processed.** Pages without `layout` are never rendered, but the plugin processes them like any page, so the drafts' images put 18 variants into `public/_img/` that no page links to. Skipping layout-less pages is **not** an option: `plugin-stacks` embeds layout-less fragments (`pages/*/references/*.md`) into other pages, and their images must be processed. The images themselves are public already (they sit in the assets folder), so nothing new leaks.
+
+**D11 `.neraignore` run.** With `images` added to `.neraignore`: `public/` 34.6 MB, 682 files. No content `<picture>` references an original. `public/images/` keeps only `references/`, which comes from the **theme package's** assets: the theme pass ignores `.neraignore` by design. But **8 URLs break**, the caveat D11 names, made concrete: the blog teaser (`img(src=meta.image)` in `blog-detail.pug`), `og:image` tags built from `meta.image`, and two SVG diagrams. Also learned: `.neraignore` matches **exact paths and folder prefixes only, no globs** (`render.js#ignoreFiles`), so "ignore only the JPEGs" cannot be expressed. The README's privacy recipe now says both.
+
+**README.** Complete per the item: features, before/after (real field-test markup), config reference, query parameters, captions, frontmatter + mixin, `og:image` snippet with origin + `base_path` (slice 5 note), the hero/`eager_first` interplay (below), placeholders with the CSP and transparency notes (slice 6 note), the `.neraignore` recipe with its caveats, cache + CI snippets (GitHub `actions/cache` and GitLab), compatibility (core ≥ 4.13.0). The "work in progress" banner now says "not published yet" until slice 8.
+
+**Learned about `eager_first`.** On a layout with a teaser above the content, the teaser is the LCP element, but `eager_first` gives `fetchpriority="high"` to the first *Markdown* image further down. Rendering the teaser with `+picture(…, { loading: 'eager' })` and setting `eager_first: false` took LCP from 2.6 s to 1.8–1.9 s (table). The README now says this. The default stays `true`: it is right for a site whose first content image is the hero.
+
+**Recommendations for michael-becker-berlin.de (not implemented, the site is live):**
+
+1. Add `@nera-static/plugin-images` to `dependencies` and update core to ≥ 4.13.0 (`npm update @nera-static/nera`, which resolves core 4.14.0). Without the core update the build now stops with the D12 message.
+2. `.gitignore`: add `.nera-cache`. `.gitlab-ci.yml`: add `.nera-cache/` to the build job's `cache:` paths, or every pipeline pays the full cold build.
+3. `themes/technical/views/pages/blog-detail.pug`: render the teaser with the mixin and set `eager_first: false` in `config/images.yaml`. Tested in the copy:
+    ```pug
+    include /vendor/plugin-images/picture
+    …
+    if (meta.images && meta.images.image)
+      +picture(meta.images.image, { alt: meta.image_alt, class: 'teaser', loading: 'eager' })
+    else if (meta.image)
+      img.teaser(src=meta.image, alt=meta.image_alt)
+    ```
+    after `npx nera-images` (publishes to `theme/views/vendor/plugin-images/`). `tags.pug` (both themes) and the `og:image` tags can move to `meta.images` the same way.
+4. Until templates use `meta.images` everywhere, set `frontmatter_keys: []`: the 68 frontmatter images cost two thirds of the work (with `[]`: 36 images, 171 variants, 111 s CPU instead of ~330 s, `_img/` 12.5 MB instead of 28.8 MB). `components/references.pug` builds its own 720/1080/1440 AVIF/WebP `srcset` from hand-made files in `themes/technical/assets/images/references/`; the mixin with `sizes` could replace that set with one master image per reference.
+5. `.neraignore`: do not add `images` before 3. and 4. are done (8 broken URLs, above). A dedicated folder for Markdown-only photos is the safe target.
+6. CSS: nothing needed. The theme's `img { display: block; max-width: 100%; height: auto }` and `.doc img` still match the `<img>` inside `<picture>`, and the copy showed no layout shift (Lighthouse CLS 0 with the plugin; one run of each configuration showed 0.115, with and without the plugin, so it is not the images). `figure.nera-image` needs styling only once a post uses a captioned image (none does today).
 
 ### Slice 8 — Release
 - [ ] **Confirm with the user**, then create the GitHub repo `seebaermichi/nera-plugin-images` (`gh repo create`), push `main`, enable private vulnerability reporting, add the `protect-main` ruleset + secret-scanning push protection, add the Dependabot config (match the fleet, see the memory note "Dependabot posture").
