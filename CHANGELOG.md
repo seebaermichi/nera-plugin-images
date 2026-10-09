@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-10-09
+
+### Fixed
+
+-   README: a missing `alt` is reported by `nera check` (output rule
+    `a11y-img-alt`), not by `nera validate`; the CI cache snippet uses
+    `actions/cache@v6`; the `og:image` snippet says that `app.origin` comes
+    from the `origin` key in `config/app.yaml`
+
 ## [1.0.0] - 2026-10-09
 
 ### Added

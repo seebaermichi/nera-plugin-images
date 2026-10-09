@@ -52,7 +52,7 @@ Without the plugin, this is a bare `<img src="/images/blog/2026/zerpensafari-iph
 </picture>
 ```
 
-The `<img>` fallback keeps the source's own format (JPEG stays JPEG, PNG stays PNG; AVIF and TIFF fall back to JPEG) and always points at a processed variant, never the original. Widths are never upscaled. `width`/`height` are the largest variant's size, so the browser reserves the right space before the image loads (no layout shift). Every attribute you set on the original `<img>` (`alt`, `class`, `id`, `data-*`, …) is kept. A missing `alt` stays missing: [`nera validate`](https://nera.js.org) reports it, the plugin does not invent one.
+The `<img>` fallback keeps the source's own format (JPEG stays JPEG, PNG stays PNG; AVIF and TIFF fall back to JPEG) and always points at a processed variant, never the original. Widths are never upscaled. `width`/`height` are the largest variant's size, so the browser reserves the right space before the image loads (no layout shift). Every attribute you set on the original `<img>` (`alt`, `class`, `id`, `data-*`, …) is kept. A missing `alt` stays missing: [`nera check`](https://nera.js.org) reports it (rule `a11y-img-alt`), the plugin does not invent one.
 
 On the field-test site (a German/English blog), the 32 content images went from 4.2 MB of originals to 0.45 MB of AVIF a phone downloads, and the Lighthouse mobile LCP of a blog post dropped from 3.5–3.8 s to 2.6 s; with its teaser image rendered through the mixin as well (see below), to 1.8–1.9 s.
 
@@ -181,7 +181,7 @@ Options: `alt`, `class`, `sizes` (for a column layout, e.g. `'(min-width: 60em) 
 
 ### `og:image`
 
-Core's `base_path` rewriting does not touch `<meta content>`, and `og:image` must be an absolute URL anyway, so add your origin (and `base_path`, if you use one) in the template:
+Core's `base_path` rewriting does not touch `<meta content>`, and `og:image` must be an absolute URL anyway, so add your origin (and `base_path`, if you use one) in the template. `app.origin` is the `origin` key of your `config/app.yaml` (for example `origin: https://example.com`); core does not set it for you:
 
 ```pug
 if meta.images && meta.images.image && meta.images.image.og
@@ -222,7 +222,7 @@ A cold build of a site with ~100 images takes a minute or more, because AVIF enc
 
 ```yaml
 # GitHub Actions, before `npm run build`
-- uses: actions/cache@v4
+- uses: actions/cache@v6
   with:
       path: .nera-cache
       key: nera-images-${{ hashFiles('assets/**', 'theme/assets/**', 'config/images.yaml') }}
