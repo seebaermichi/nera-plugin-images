@@ -293,3 +293,61 @@ describe('frontmatter images (D9)', () => {
         await expect(run({ image: '/images/alpha.png' })).rejects.toThrow(/too old/)
     })
 })
+
+describe('placeholders (D10)', () => {
+    const configure = (yaml) => {
+        fs.mkdirSync(path.join(root, 'config'), { recursive: true })
+        fs.writeFileSync(path.join(root, 'config', 'images.yaml'), yaml)
+    }
+    const page = {
+        content: '<p><img src="/images/photo.jpg" alt="p"></p><p><img src="/images/alpha.png" alt="a"></p>',
+        meta: { href: '/index.html', image: '/images/photo.jpg' },
+    }
+    const run = async () => {
+        const [result] = await getMetaData({ app: app(), pagesData: [page] })
+        await getAssets()
+        return { result, $: load(result.content, null, false) }
+    }
+
+    it('emits no style and no placeholder data by default', async () => {
+        const { result, $ } = await run()
+
+        expect($('img[style]')).toHaveLength(0)
+        expect(result.meta.images.image).not.toHaveProperty('color')
+        expect(result.meta.images.image).not.toHaveProperty('blur')
+    })
+
+    it('applies placeholder: color to the content pass and meta.images, not to transparent images or og', async () => {
+        configure('placeholder: color\n')
+        const { result, $ } = await run()
+        const { color } = result.meta.images.image
+
+        expect(color).toMatch(/^#[0-9a-f]{6}$/)
+        expect($('img[alt="p"]').attr('style')).toBe(`background-color:${color}`)
+        expect($('img[alt="a"]').attr('style')).toBeUndefined()
+        expect(result.meta.images.image.og).toEqual({
+            src: expect.any(String),
+            width: expect.any(Number),
+            height: expect.any(Number),
+        })
+    })
+
+    it('applies placeholder: blur the same way, under 1 KB per image', async () => {
+        configure('placeholder: blur\n')
+        const { result, $ } = await run()
+        const { blur } = result.meta.images.image
+
+        expect(blur).toMatch(/^data:image\/webp;base64,/)
+        expect(blur.length).toBeLessThan(1024)
+        expect($('img[alt="p"]').attr('style')).toBe(`background-image:url(${blur});background-size:cover`)
+        expect($('img[alt="a"]').attr('style')).toBeUndefined()
+    })
+
+    it('warns about an unknown mode and falls back to none', async () => {
+        configure('placeholder: dominant\n')
+        const { $ } = await run()
+
+        expect($('img[style]')).toHaveLength(0)
+        expect(warn.mock.calls.join('\n')).toMatch(/placeholder/)
+    })
+})

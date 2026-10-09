@@ -9,15 +9,19 @@
 //- has no image. Options: `alt`, `class`, `sizes` (overrides the entry's),
 //- `loading` (`lazy` by default; `eager` adds `fetchpriority="high"` for a
 //- hero image). Extra attributes go onto the <img>:
-//- `+picture(image, { alt: '' })(data-zoom)`.
+//- `+picture(image, { alt: '' })(data-zoom)`. A placeholder the plugin
+//- computed (`placeholder: color | blur` in config/images.yaml) becomes the
+//- <img>'s `style`, as in the content pass.
 mixin picture-img(image, opts, sizes)
     - const eager = opts.loading === 'eager'
+    - const placeholder = image.blur ? `background-image:url(${image.blur});background-size:cover` : image.color ? `background-color:${image.color}` : undefined
     img(
         src=image.src
         srcset=image.srcset
         sizes=sizes
         width=image.width
         height=image.height
+        style=placeholder
         alt=opts.alt
         class=opts.class
         loading=eager ? 'eager' : 'lazy'

@@ -331,6 +331,38 @@ describe('a frontmatter image through the +picture mixin', () => {
     }, 60_000)
 })
 
+describe('placeholders end to end (D10)', () => {
+    it('inlines the blur from a cold build and reads it from the manifest on a warm one', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nera-images-ph-'))
+        try {
+            makeSite(root)
+            await makeImages(path.join(root, 'assets', 'images'))
+            write(path.join(root, 'config', 'images.yaml'), 'placeholder: blur\nformats: [webp]\n')
+            write(path.join(root, 'pages', 'index.md'), page('![A photo](/images/photo.jpg)\n\n![Alpha](/images/alpha.png)'))
+
+            await build(root)
+            const style = html(root, 'index.html')('img[alt="A photo"]').attr('style')
+            const manifest = JSON.parse(
+                fs.readFileSync(path.join(root, '.nera-cache', 'images', 'manifest.json'), 'utf-8')
+            )
+            const entries = Object.values(manifest.entries)
+
+            expect(logged(log)).toMatch(/2 image\(s\), \d+ variant\(s\) encoded, 2 placeholder\(s\) computed/)
+            expect(style).toMatch(/^background-image:url\(data:image\/webp;base64,[A-Za-z0-9+/]+=*\);background-size:cover$/)
+            expect(html(root, 'index.html')('img[alt="Alpha"]').attr('style')).toBeUndefined()
+            expect(entries.map((e) => e.blur).filter(Boolean)).toEqual([style.slice(21, style.indexOf(');'))])
+            expect(entries.filter((e) => e.transparent)).toHaveLength(1)
+
+            const before = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf-8')
+            await build(root)
+            expect(logged(log)).toMatch(/0 variant\(s\) encoded, 0 placeholder\(s\) computed/)
+            expect(fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf-8')).toBe(before)
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true })
+        }
+    }, 60_000)
+})
+
 describe('a site without images', () => {
     it('creates no cache and no _img folder', async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nera-images-none-'))

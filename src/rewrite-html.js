@@ -52,12 +52,28 @@ function groupByFormat(variants) {
 }
 
 /**
+ * The inline style of a placeholder (D10), or `''` without one:
+ * `background-color` for `color`, the data URI as a covering
+ * `background-image` for `blur`.
+ *
+ * @param {{ color?: string, blur?: string }} image
+ */
+export function placeholderStyle({ color, blur }) {
+    if (blur) return `background-image:url(${blur});background-size:cover`
+    if (color) return `background-color:${color}`
+    return ''
+}
+
+/**
  * The attributes of the new `<img>`, in a fixed order (D13): the computed
  * ones first, then the author's own in their original order, then the
  * loading hints.
  *
+ * A placeholder adds `style` right after `height`; an author's own `style` is
+ * appended to it there, so the author's declarations still win.
+ *
  * @param {object} original the original `<img>`'s attributes
- * @param {object} image `{ src, srcset, sizes, width, height }`
+ * @param {object} image `{ src, srcset, sizes, width, height, color?, blur? }`
  * @param {boolean} eager whether this is the page's eager image
  */
 export function imgAttributes(original, image, eager) {
@@ -68,8 +84,14 @@ export function imgAttributes(original, image, eager) {
         width: String(image.width),
         height: String(image.height),
     }
+    const placeholder = placeholderStyle(image)
+    if (placeholder) {
+        const own = original.style?.trim().replace(/;$/, '')
+        attrs.style = own ? `${placeholder};${own}` : placeholder
+    }
     for (const [name, value] of Object.entries(original)) {
         if (OWNED.has(name) || LOADING_HINTS.has(name) || name === SKIP_ATTR) continue
+        if (name === 'style' && placeholder) continue
         attrs[name] = value
     }
 
@@ -90,7 +112,8 @@ export function imgAttributes(original, image, eager) {
  * `sizes`, `width`, `height`, `type`) and one `{ type, srcset }` per modern
  * format, in `formats` order. The content pass builds its `<picture>` from it,
  * and the frontmatter pass hands it to templates as `meta.images.<key>` (D9),
- * so both always describe the same files the same way.
+ * so both always describe the same files the same way. A placeholder (D10)
+ * comes along as `color` or `blur` when the image has one.
  *
  * @param {{ variants: object[], width: number, height: number }} image
  *     what `generate` returned (variants carry their cache `file`)
@@ -101,7 +124,7 @@ export function pictureData(image, { outputPath, sizes }) {
     const fallback = groups[groups.length - 1]
     const largest = fallback.variants[fallback.variants.length - 1]
 
-    return {
+    const data = {
         src: publicUrl(outputPath, largest.file),
         srcset: srcsetOf(fallback.variants, outputPath),
         sizes,
@@ -113,6 +136,9 @@ export function pictureData(image, { outputPath, sizes }) {
             srcset: srcsetOf(group.variants, outputPath),
         })),
     }
+    if (image.color) data.color = image.color
+    if (image.blur) data.blur = image.blur
+    return data
 }
 
 /**

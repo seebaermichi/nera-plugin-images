@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { load } from 'cheerio'
-import { imgAttributes, rewriteHtml } from '../src/rewrite-html.js'
+import { imgAttributes, pictureData, placeholderStyle, rewriteHtml } from '../src/rewrite-html.js'
 
 // A generated image as `generate` returns it, without sharp: avif + webp +
 // a jpeg fallback at 480/800/1200, so the markup tests run on fixed names.
@@ -327,5 +327,57 @@ describe('rewriteHtml <figure> from the title (D8)', () => {
         const input = '<p><img src="/logo.svg" title="Cap"></p>'
         const { html } = await figure(input, async () => null)
         expect(html).toBe(input)
+    })
+})
+
+describe('placeholders in the markup (D10)', () => {
+    const BLUR = 'data:image/webp;base64,UklGRiIAAABXRUJQ'
+    const withPlaceholder = (extra) => async () => ({ image: { ...fakeImage(), ...extra } })
+    const imgOf = async (html, extra) =>
+        load((await rewrite(html, withPlaceholder(extra))).html, null, false)('img')
+
+    it('builds the style from color or blur, and nothing without either', () => {
+        expect(placeholderStyle({ color: '#a1b2c3' })).toBe('background-color:#a1b2c3')
+        expect(placeholderStyle({ blur: BLUR })).toBe(`background-image:url(${BLUR});background-size:cover`)
+        expect(placeholderStyle({})).toBe('')
+        expect(placeholderStyle({ transparent: true })).toBe('')
+    })
+
+    it('sets the colour as style right after width/height', async () => {
+        const img = await imgOf('<img src="/a.jpg" alt="x">', { color: '#a1b2c3' })
+
+        expect(img.attr('style')).toBe('background-color:#a1b2c3')
+        expect(Object.keys(img.attr()).slice(0, 7)).toEqual(['src', 'srcset', 'sizes', 'width', 'height', 'style', 'alt'])
+    })
+
+    it('inlines the blur as a covering background image', async () => {
+        const img = await imgOf('<img src="/a.jpg">', { blur: BLUR })
+        expect(img.attr('style')).toBe(`background-image:url(${BLUR});background-size:cover`)
+    })
+
+    it('emits no style with placeholder none, or for a transparent image', async () => {
+        expect((await imgOf('<img src="/a.jpg">', {})).attr('style')).toBeUndefined()
+        expect((await imgOf('<img src="/a.jpg">', { transparent: true })).attr('style')).toBeUndefined()
+    })
+
+    it('appends the author\'s own style, so it still wins', async () => {
+        const img = await imgOf('<img src="/a.jpg" style="background-color: red; border: 0;">', { color: '#a1b2c3' })
+        expect(img.attr('style')).toBe('background-color:#a1b2c3;background-color: red; border: 0')
+
+        // Without a placeholder the author's style stays where it was, as written.
+        const plain = await imgOf('<img src="/a.jpg" alt="x" style="border: 0;">', {})
+        expect(plain.attr('style')).toBe('border: 0;')
+        expect(Object.keys(plain.attr()).indexOf('style')).toBeGreaterThan(Object.keys(plain.attr()).indexOf('alt'))
+    })
+
+    it('carries color and blur into pictureData, for meta.images', () => {
+        const options = { outputPath: '/_img', sizes: '100vw' }
+        expect(pictureData({ ...fakeImage(), color: '#a1b2c3' }, options).color).toBe('#a1b2c3')
+        expect(pictureData({ ...fakeImage(), blur: BLUR }, options).blur).toBe(BLUR)
+
+        const plain = pictureData({ ...fakeImage(), transparent: true }, options)
+        expect(plain).not.toHaveProperty('color')
+        expect(plain).not.toHaveProperty('blur')
+        expect(plain).not.toHaveProperty('transparent')
     })
 })

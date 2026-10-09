@@ -6,6 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import {
     encodeVariant,
     fallbackFormat,
+    placeholderOf,
     planVariants,
     readSourceMeta,
 } from '../src/transform.js'
@@ -357,5 +358,56 @@ describe('readSourceMeta + encodeVariant', () => {
 
         await expect(encodeVariant(Buffer.from('nope'), variant, file)).rejects.toThrow()
         expect(fs.readdirSync(path.dirname(file)).filter((n) => n.startsWith('broken'))).toEqual([])
+    })
+
+    describe('placeholderOf (D10)', () => {
+        const plan = async (extra = {}) => {
+            const variants = planVariants(await readSourceMeta(paths.photo), { ...config, formats: [], ...extra })
+            return variants[variants.length - 1]
+        }
+        const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+
+        it('gives the dominant colour of the region the variant shows, as #rrggbb', async () => {
+            // Upright, the photo is red on top and blue below (orientation 6).
+            const top = await placeholderOf(paths.photo, await plan({ ratio: 2, focus: { x: 50, y: 0 } }), 'color')
+            const bottom = await placeholderOf(paths.photo, await plan({ ratio: 2, focus: { x: 50, y: 100 } }), 'color')
+
+            expect(top.color).toMatch(/^#[0-9a-f]{6}$/)
+            const [r, , b] = rgb(top.color)
+            expect(r).toBeGreaterThan(200)
+            expect(b).toBeLessThan(60)
+            const [r2, , b2] = rgb(bottom.color)
+            expect(b2).toBeGreaterThan(200)
+            expect(r2).toBeLessThan(60)
+            expect(Object.keys(top)).toEqual(['color'])
+        })
+
+        it('gives a tiny WebP data URI of the variant\'s aspect for blur', async () => {
+            const variant = await plan()
+            const { blur } = await placeholderOf(fs.readFileSync(paths.photo), variant, 'blur')
+
+            expect(blur).toMatch(/^data:image\/webp;base64,[A-Za-z0-9+/]+=*$/)
+            expect(blur.length).toBeLessThan(1024)
+            const meta = await sharp(Buffer.from(blur.split(',')[1], 'base64')).metadata()
+            expect(meta.format).toBe('webp')
+            expect(meta.width).toBe(16)
+            expect(meta.height).toBe(Math.round((16 * variant.height) / variant.width))
+            expect(meta.exif).toBeUndefined()
+        })
+
+        it('marks an image that is not fully opaque as transparent instead', async () => {
+            const [variant] = planVariants(await readSourceMeta(paths.alpha), { ...config, formats: [] })
+
+            expect(await placeholderOf(paths.alpha, variant, 'color')).toEqual({ transparent: true })
+            expect(await placeholderOf(paths.alpha, variant, 'blur')).toEqual({ transparent: true })
+        })
+
+        it('treats contain padding as transparency', async () => {
+            const variant = await plan({ ratio: 3, fit: 'contain' })
+            expect(variant.format).toBe('jpeg')
+            // The JPEG fallback is flattened, but the modern formats keep the
+            // transparent padding, so the image as a whole is not opaque.
+            expect(await placeholderOf(paths.photo, variant, 'color')).toEqual({ transparent: true })
+        })
     })
 })

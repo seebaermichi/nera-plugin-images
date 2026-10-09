@@ -3,7 +3,8 @@
 // `getMetaData` finds every local raster image in the rendered pages,
 // generates its variants into the cache and rewrites the `<img>` as
 // `<picture>` markup; frontmatter images get the same variants as data in
-// `meta.images.<key>`, for the `+picture` mixin. `getAssets` (core >= 4.13.0) then prunes the cache and
+// `meta.images.<key>`, for the `+picture` mixin, both with an optional
+// placeholder. `getAssets` (core >= 4.13.0) then prunes the cache and
 // hands its files to core, which copies them to `public/<output_path>`.
 // See ROADMAP.md for the decisions (D1–D13) behind each step.
 import fs from 'fs'
@@ -63,6 +64,8 @@ export async function getMetaData({ app, pagesData }) {
         formats: config.formats,
         quality: config.quality,
     }
+    // D10. The og image (D9) gets none: it is a file for crawlers, not markup.
+    const placeholder = { placeholder: config.placeholder }
     current = null
 
     // What one URL on one page means: `null` (not ours, or left as is with a
@@ -108,7 +111,7 @@ export async function getMetaData({ app, pagesData }) {
                 const image = await generator.generate(prepared.file, {
                     ...options,
                     ...prepared.params.options,
-                })
+                }, placeholder)
                 return {
                     image,
                     sizes: sizesFor(prepared.params, config.sizes),
@@ -134,7 +137,7 @@ export async function getMetaData({ app, pagesData }) {
                 const image = await generator.generate(prepared.file, {
                     ...options,
                     ...params.options,
-                })
+                }, placeholder)
                 const entry = pictureData(image, {
                     outputPath: config.output_path,
                     sizes: sizesFor(params, config.sizes),
@@ -172,8 +175,11 @@ export async function getMetaData({ app, pagesData }) {
 
     current = { config, cache, generator }
     if (images > 0) {
+        const placeholders = config.placeholder === 'none'
+            ? ''
+            : `, ${generator.placeholders} placeholder(s) computed`
         console.log(
-            `🖼️  plugin-images: ${images} image(s), ${generator.encoded} variant(s) encoded`
+            `🖼️  plugin-images: ${images} image(s), ${generator.encoded} variant(s) encoded${placeholders}`
         )
     }
     return result

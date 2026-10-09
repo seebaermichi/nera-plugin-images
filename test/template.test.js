@@ -76,4 +76,15 @@ describe('+picture mixin', () => {
         // eslint-disable-next-line quotes
         expect(render(`+picture(image, { alt: '"A" <b>' })`)).toContain('alt="&quot;A&quot; &lt;b&gt;"')
     })
+
+    it('renders a placeholder as the <img> style, like the content pass', () => {
+        const color = load(render('+picture(withColor)', { withColor: { ...image, color: '#a1b2c3' } }))
+        expect(color('img').attr('style')).toBe('background-color:#a1b2c3')
+
+        const blur = 'data:image/webp;base64,UklGRiIAAABXRUJQ'
+        const blurred = load(render('+picture(withBlur)', { withBlur: { ...image, blur } }))
+        expect(blurred('img').attr('style')).toBe(`background-image:url(${blur});background-size:cover`)
+
+        expect(load(render('+picture(image)'))('img').attr('style')).toBeUndefined()
+    })
 })

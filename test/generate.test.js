@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { openCache } from '../src/cache.js'
 import { createGenerator } from '../src/generate.js'
 import { createQueue } from '../src/queue.js'
-import { encodeVariant } from '../src/transform.js'
+import { encodeVariant, placeholderOf } from '../src/transform.js'
 import { makeImages } from './fixtures/make-images.js'
 
 const options = {
@@ -135,5 +135,76 @@ describe('createGenerator', () => {
         })
 
         await expect(generator.generate(bogus, options)).rejects.toThrow()
+    })
+})
+
+describe('placeholders in the manifest (D10)', () => {
+    async function run(cacheDir, images, mode) {
+        const cache = openCache(cacheDir)
+        const placeholder = vi.fn(placeholderOf)
+        const encode = vi.fn(encodeVariant)
+        const generator = createGenerator({ cache, queue: createQueue({ concurrency: 2 }), encode, placeholder })
+        const results = []
+        for (const file of images) {
+            results.push(await generator.generate(file, options, { placeholder: mode }))
+        }
+        cache.prune(generator.usedKeys())
+        cache.save()
+        return { cache, placeholder, encode, generator, results }
+    }
+
+    it('computes nothing with placeholder none and keeps the entry as before', async () => {
+        const { placeholder, results, cache } = await run(path.join(dir, 'ph-none'), [paths.photo], 'none')
+
+        expect(placeholder).not.toHaveBeenCalled()
+        expect(Object.keys(cache.get(results[0].key))).toEqual(['width', 'height', 'files'])
+    })
+
+    it('stores the placeholder with the entry and reads it back on a warm build', async () => {
+        const cacheDir = path.join(dir, 'ph-warm')
+        const first = await run(cacheDir, [paths.photo, paths.photo], 'color')
+
+        // Same image twice in one build: computed once.
+        expect(first.placeholder).toHaveBeenCalledTimes(1)
+        expect(first.generator.placeholders).toBe(1)
+        expect(first.results[0].color).toMatch(/^#[0-9a-f]{6}$/)
+        expect(openCache(cacheDir).get(first.results[0].key).color).toBe(first.results[0].color)
+
+        const second = await run(cacheDir, [paths.photo], 'color')
+        expect(second.placeholder).not.toHaveBeenCalled()
+        expect(second.encode).not.toHaveBeenCalled()
+        expect(second.results[0].color).toBe(first.results[0].color)
+    })
+
+    it('keeps the manifest key and every file when the mode changes', async () => {
+        const cacheDir = path.join(dir, 'ph-switch')
+        const none = await run(cacheDir, [paths.photo], 'none')
+        const blur = await run(cacheDir, [paths.photo], 'blur')
+
+        expect(blur.results[0].key).toBe(none.results[0].key)
+        expect(blur.encode).not.toHaveBeenCalled()
+        expect(blur.placeholder).toHaveBeenCalledTimes(1)
+        expect(blur.results[0].blur).toMatch(/^data:image\/webp;base64,/)
+
+        // Only the current mode's data is kept.
+        const color = await run(cacheDir, [paths.photo], 'color')
+        expect(color.placeholder).toHaveBeenCalledTimes(1)
+        const entry = openCache(cacheDir).get(color.results[0].key)
+        expect(entry.color).toBeDefined()
+        expect(entry.blur).toBeUndefined()
+
+        await run(cacheDir, [paths.photo], 'none')
+        expect(Object.keys(openCache(cacheDir).get(color.results[0].key))).toEqual(['width', 'height', 'files'])
+    })
+
+    it('remembers a transparent image, whatever the mode', async () => {
+        const cacheDir = path.join(dir, 'ph-alpha')
+        const first = await run(cacheDir, [paths.alpha], 'blur')
+        expect(first.results[0]).toMatchObject({ transparent: true })
+        expect(first.results[0].blur).toBeUndefined()
+
+        const second = await run(cacheDir, [paths.alpha], 'color')
+        expect(second.placeholder).not.toHaveBeenCalled()
+        expect(second.results[0].color).toBeUndefined()
     })
 })

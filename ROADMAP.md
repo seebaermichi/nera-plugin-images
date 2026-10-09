@@ -150,6 +150,7 @@ Config `placeholder: none | color | blur` (default `none`).
 - `color`: dominant color (`sharp().stats().dominant`), emitted as `style="background-color:#rrggbb"` on `<img>`.
 - `blur`: a ~16 px wide WebP, base64-inlined as `background-image` + `background-size: cover`. Roughly 300–600 bytes of HTML per image, documented as a trade-off.
 - Inline `style` conflicts with a strict CSP (`style-src` without `'unsafe-inline'`). The README says so. That is why the default is `none`.
+- *Refined 2026-10-09 (slice 6, agreed with the user):* an image that is not fully opaque (alpha, or transparent `fit=contain` padding) gets **no** placeholder, because the background would stay visible through it after loading.
 
 ### D11 — Keeping originals out of `public/`
 The plugin reads sources from `app.folders.assets` **regardless of `.neraignore`**. A site that lists its photo folder (e.g. `images`) in `.neraignore` publishes only the processed, metadata-stripped variants, and the originals with their EXIF/GPS never leave the repo. No extra config. The README documents this prominently, with the caveat that anything in that folder the plugin does not process (SVG, GIF, linked downloads) is then unpublished too.
@@ -331,9 +332,19 @@ Pure modules, unit-tested in isolation:
 - **`base_path`:** the mixin's `src`/`srcset` are prefixed by core's `rewriteHtmlUrls` (integration-tested with `base_path: /sub`). A `<meta content>` is **not** rewritten by core, so `meta.images.image.og.src` used in an `og:image` tag needs the origin and `base_path` added by the template, like any root-relative URL there. og:image must be an absolute URL anyway. **Slice 7:** say so in the README, with a snippet.
 
 ### Slice 6 — Placeholders
-- [ ] `placeholder: color | blur` (D10), stored in the manifest so cached builds don't recompute.
-- [ ] Applied in both the content pass and `meta.images`.
-- [ ] Tests: color is a valid `#rrggbb`, blur data URI under 1 KB, `none` emits no `style`.
+- [x] `placeholder: color | blur` (D10), stored in the manifest so cached builds don't recompute.
+- [x] Applied in both the content pass and `meta.images`.
+- [x] Tests: color is a valid `#rrggbb`, blur data URI under 1 KB, `none` emits no `style`.
+
+**Done 2026-10-09.** Placeholders committed on `main`: 262 tests (20 new in `transform`, `generate`, `rewrite-html`, `template`, `index` and `integration`), lint clean, green on Node 20.20 and 22. One point D10 left open was **decided with the user before implementing** and is written into D10 above: images that are not fully opaque get no placeholder. Everything else fills gaps and does not contradict D1–D13:
+
+- **Transparent images get no placeholder** (decided with the user). A background behind an image with alpha, or behind `fit=contain` padding (transparent in AVIF/WebP), would stay visible through the transparent parts after loading. "Transparent" is sharp's `stats().isOpaque === false` on the shaped sample, not the `hasAlpha` flag, so an opaque PNG with an alpha channel still gets one. The manifest records `transparent: true`, so the check is not repeated, whatever the mode.
+- **Where the code lives.** `placeholderOf(input, variant, mode)` in `src/transform.js` computes it from the **largest planned variant's geometry**, so the colour and the blur show the crop the visitor sees (a `focus=50,0` crop of the red/blue fixture is red, `focus=50,100` blue). The rotate/crop/resize/sRGB part of `encodeVariant` moved into a shared `shape()` for this, and the encoder output is unchanged (`CACHE_VERSION` stays 1). One 64 px wide PNG sample is rendered. `stats()` on it gives `isOpaque` and `dominant` (`#rrggbb`, lower case), and the blur is that sample resized to 16 px wide (height from the variant's aspect) as WebP quality 50. The fixture photo's data URI is 159 characters. Slice 7 measures real photos against D10's 300–600 bytes.
+- **The manifest key does not include the mode.** A placeholder adds data to an entry but changes none of its files, so switching `placeholder` on keeps every cached variant and only computes the placeholders (tested). `generate(file, options, { placeholder })` takes the mode as a third argument. An entry keeps **only the current mode's data**: switching to `color` drops a stored `blur`, and `none` drops both. Computation goes through the queue (key `placeholder:<mode>:<image key>`), so an image used several times in a build is computed once and the work counts against `concurrency`.
+- **The og image gets no placeholder.** It is a file for crawlers, not markup.
+- **Markup.** `pictureData` carries `color`/`blur` when present (never `transparent`), so `meta.images.<key>` and the content pass share them. On the content pass's `<img>`, `style` comes right after `height`. An author's own `style` is appended after the placeholder (`background-color:#…;<author's>`, one trailing `;` trimmed), so the author's declarations still win. Without a placeholder, the author's `style` keeps its place and its exact text. The mixin builds the same `style`. Blur is `background-image:url(data:…);background-size:cover`, and colour is `background-color:#rrggbb`, nothing more. With `none` the markup is byte-identical to slice 5.
+- **The build line** gets `, P placeholder(s) computed` when `placeholder` is not `none`. The integration test uses it to prove that a warm build computes 0.
+- **Slice 7:** the README needs the CSP note (D10), the transparency rule, and a hint that a placeholder is visible only while the image loads.
 
 ### Slice 7 — Field test + README
 - [ ] Field test against `../nera-websites/michael-becker-berlin.de` (blog images under `theme/assets/images/blog/2026/`, the ZerpenSafari example) with `npm install ../nera-plugin-images --no-save`. Record: cold build time, warm build time, `public/` size before/after, Lighthouse/LCP spot check of one blog post, `nera check` (validate output rules) still clean.

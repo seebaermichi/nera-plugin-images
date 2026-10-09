@@ -172,6 +172,27 @@ export function planVariants(source, options) {
     )
 }
 
+// The pixels of one variant before encoding: EXIF orientation applied,
+// cropped, resized and in sRGB. Shared by the encoder and the placeholders,
+// so a placeholder always shows exactly the variant's region.
+function shape(input, { width, height, fit, crop }) {
+    let image = sharp(input).rotate()
+
+    if (crop && crop.strategy) {
+        image = image.resize(width, height, {
+            fit: 'cover',
+            position: sharp.strategy[crop.strategy],
+        })
+    } else {
+        if (crop) image = image.extract(crop)
+        image = image.resize(width, height, {
+            fit,
+            background: { r: 255, g: 255, b: 255, alpha: 0 },
+        })
+    }
+    return image.toColourspace('srgb')
+}
+
 function encoder(image, { format, quality }) {
     switch (format) {
     case 'avif':
@@ -203,22 +224,7 @@ function encoder(image, { format, quality }) {
  * @param {string} outFile absolute target path
  */
 export async function encodeVariant(input, variant, outFile) {
-    const { width, height, fit, crop } = variant
-    let image = sharp(input).rotate()
-
-    if (crop && crop.strategy) {
-        image = image.resize(width, height, {
-            fit: 'cover',
-            position: sharp.strategy[crop.strategy],
-        })
-    } else {
-        if (crop) image = image.extract(crop)
-        image = image.resize(width, height, {
-            fit,
-            background: { r: 255, g: 255, b: 255, alpha: 0 },
-        })
-    }
-    image = encoder(image.toColourspace('srgb'), variant)
+    const image = encoder(shape(input, variant), variant)
 
     fs.mkdirSync(path.dirname(outFile), { recursive: true })
     const temp = `${outFile}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
@@ -229,4 +235,48 @@ export async function encodeVariant(input, variant, outFile) {
         fs.rmSync(temp, { force: true })
         throw err
     }
+}
+
+export const PLACEHOLDER_SAMPLE_WIDTH = 64
+export const BLUR_WIDTH = 16
+const BLUR_QUALITY = 50
+
+// The same variant at another width, with the height following its aspect.
+const scaled = (variant, width) => {
+    const w = Math.min(width, variant.width)
+    return { ...variant, width: w, height: Math.max(1, Math.round((w * variant.height) / variant.width)) }
+}
+
+const hex = (value) => Math.round(value).toString(16).padStart(2, '0')
+
+/**
+ * The placeholder of one image (D10), computed from its largest variant's
+ * geometry so it shows the same crop the visitor will see.
+ *
+ * - `color`: the dominant colour as `#rrggbb`;
+ * - `blur`: a {@link BLUR_WIDTH} px wide WebP as a base64 data URI.
+ *
+ * An image that is not fully opaque (alpha, or `fit=contain` padding) gets
+ * `{ transparent: true }` instead: a background behind it would stay visible
+ * through the transparent parts after loading (decided 2026-10-09).
+ *
+ * @param {string|Buffer} input source file path or bytes
+ * @param {object} variant the largest planned variant
+ * @param {'color'|'blur'} mode
+ * @returns {Promise<{ color: string }|{ blur: string }|{ transparent: true }>}
+ */
+export async function placeholderOf(input, variant, mode) {
+    const sample = await shape(input, scaled(variant, PLACEHOLDER_SAMPLE_WIDTH)).png().toBuffer()
+    const { isOpaque, dominant } = await sharp(sample).stats()
+    if (!isOpaque) return { transparent: true }
+
+    if (mode === 'color') {
+        return { color: `#${hex(dominant.r)}${hex(dominant.g)}${hex(dominant.b)}` }
+    }
+    const { width, height } = scaled(variant, BLUR_WIDTH)
+    const blur = await sharp(sample)
+        .resize(width, height, { fit: 'fill' })
+        .webp({ quality: BLUR_QUALITY })
+        .toBuffer()
+    return { blur: `data:image/webp;base64,${blur.toString('base64')}` }
 }

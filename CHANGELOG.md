@@ -47,3 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     mixin (`views/picture.pug`), published to
     `views/vendor/plugin-images/` with `npm run publish-template` or the
     `nera-images` bin
+-   Placeholders (config `placeholder: none | color | blur`, default
+    `none`): `color` sets the image's dominant colour as
+    `style="background-color:#rrggbb"`, `blur` a 16 px wide WebP as an
+    inline `background-image`. Both apply to the content pass and to
+    `meta.images.<key>` (`color`/`blur`, rendered by the mixin), are computed
+    from the region the variants show, and are cached in the manifest. Images
+    that are not fully opaque get none. Inline styles need `'unsafe-inline'`
+    in a strict CSP's `style-src`
