@@ -1,0 +1,35 @@
+# Node modules
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+.vitest/
+
+# Builds (if you ever bundle or compile)
+dist/
+build/
+
+# VSCode settings
+.vscode/
+
+# Optional cache folders
+.cache/
+
+# npm credentials — never commit
+.npmrc
+
+# Test scratch directory
+.tmp/

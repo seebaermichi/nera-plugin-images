@@ -1,0 +1,61 @@
+{
+    "name": "@nera-static/plugin-images",
+    "version": "0.0.0",
+    "description": "A plugin for Nera static site generator to generate responsive, modern-format images (AVIF/WebP, srcset, width/height, lazy loading) at build time.",
+    "main": "index.js",
+    "scripts": {
+        "lint": "eslint .",
+        "test": "vitest",
+        "prepare": "husky"
+    },
+    "type": "module",
+    "exports": {
+        ".": "./index.js"
+    },
+    "files": [
+        "index.js",
+        "CHANGELOG.md"
+    ],
+    "keywords": [
+        "nera",
+        "nera-plugin",
+        "static-site-generator",
+        "images",
+        "responsive-images",
+        "srcset",
+        "avif",
+        "webp",
+        "sharp"
+    ],
+    "author": "Michael Becker",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/seebaermichi/nera-plugin-images"
+    },
+    "bugs": {
+        "url": "https://github.com/seebaermichi/nera-plugin-images/issues"
+    },
+    "homepage": "https://github.com/seebaermichi/nera-plugin-images#readme",
+    "publishConfig": {
+        "access": "public"
+    },
+    "peerDependencies": {
+        "@nera-static/core": ">=4.13.0"
+    },
+    "dependencies": {
+        "@nera-static/plugin-utils": "^1.6.1",
+        "cheerio": "^1.2.0",
+        "sharp": "^0.35.5"
+    },
+    "engines": {
+        "node": ">=20.18.1"
+    },
+    "devDependencies": {
+        "@nera-static/core": "^4.12.0",
+        "eslint": "^10.8.0",
+        "husky": "^9.1.7",
+        "vitest": "^5.0.0"
+    },
+    "sideEffects": false
+}

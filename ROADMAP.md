@@ -1,0 +1,299 @@
+# ROADMAP — `@nera-static/plugin-images`
+
+Responsive, modern-format images for Nera, generated at build time. It works like Statamic's Glide, but for a static site: every variant is produced during `nera build`, not on request.
+
+**This file is the single source of truth for the plugin and for the core hook it needs. Extend it; never start a parallel document.** Each slice below is sized for one session. Work through them in order, tick the checkboxes, and add a dated `**Done YYYY-MM-DD**` note with anything learned. The next session reads this file first and continues where the last one stopped.
+
+Written 2026-10-09. Scope was agreed in conversation: everything below. Pug-layout helpers that generate at render time, art direction and remote images are **out of scope** (see "Not in scope").
+
+---
+
+## The problem
+
+`generator/src/core.js` renders Markdown with `markdown-it` (`html: true`), so
+
+```md
+![Startseite der ZerpenSafari …](/images/blog/2026/zerpensafari-iphone.jpg)
+```
+
+becomes a bare `<img src="…" alt="…">`. Phones download the full original, there is no AVIF/WebP, no `width`/`height` (layout shift), no lazy loading, and camera EXIF (including GPS) ships to every visitor.
+
+## The goal
+
+The same Markdown renders to:
+
+```html
+<picture>
+    <source type="image/avif" srcset="/_img/zerpensafari-iphone-3f9a1c2e-480.avif 480w, /_img/zerpensafari-iphone-3f9a1c2e-800.avif 800w, …" sizes="100vw">
+    <source type="image/webp" srcset="… 480w, … 800w, …" sizes="100vw">
+    <img src="/_img/zerpensafari-iphone-3f9a1c2e-1200.jpg"
+         srcset="… 480w, … 800w, … 1200w"
+         sizes="100vw" width="1200" height="2600"
+         alt="Startseite der ZerpenSafari …"
+         loading="lazy" decoding="async">
+</picture>
+```
+
+The author changes nothing. Per-image control is available through Glide-style query parameters (`?w=800&ratio=16:9`), a Markdown title becomes a `<figure>` caption, and frontmatter images (cover, `og:image`) get precomputed variants for templates.
+
+---
+
+## Verified facts this design rests on (2026-10-09, core 4.12.0)
+
+- **Plugins see rendered HTML.** In `getMetaData`, `pagesData[i].content` is markdown-it output. `nera-plugin-link-attributes` already rewrites it with cheerio (`load(content, null, false)`). The content pass needs no core change.
+- **Plugins cannot write to `public/`.** `src/index.js` runs `getPluginsData` *before* `deleteFolder(dist)`, so anything a plugin writes there is deleted. That is why the core hook (slice 1) exists.
+- **Hooks are awaited** since core 4.3.0, so this plugin may be `async`. It needs core ≥ 4.13.0 (slice 1) anyway, so the "keep hooks synchronous for old clones" caution does not apply.
+- **`base_path` already handles `srcset`.** `rewriteHtmlUrls` (`render.js:53`) and the hashing pass (`render.js:255`) both rewrite `srcset` lists. Root-absolute URLs emitted by the plugin are correct on subdirectory deploys without extra work.
+- **The asset folder is `app.folders.assets`**, not a literal `assets/`. The field-test site uses the `theme/` layout (`theme/assets/images/blog/…`). A theme package's assets are resolvable via `resolveTheme({ app })` from `@nera-static/core/theme` (`.assetsRoot`).
+- **`nera dev` watches `pages/`, `config/` and the presentation folders only** (`nera-cli/src/commands/dev.js#watchTargets`). A cache folder at the site root is not watched, so it cannot cause a rebuild loop. Changing a source image under `assets/` *does* trigger a rebuild. That is correct.
+- **`@nera-static/validate` output rules see the final page.** `a11y-img-alt` keeps working because the `<img>` inside `<picture>` keeps its `alt`. The privacy rule checks `img[src|srcset]` hosts, and the plugin only emits local URLs.
+- **`sharp`** 0.35.x (engines `node >=20.9.0`), with prebuilt libvips for macOS/Linux/Windows on x64 and arm64. It matches the fleet's Node ≥ 20 floor. (The package's own floor is `>=20.18.1`, set by `cheerio` 1.2; see slice 0.)
+- **The npm name is free.** `@nera-static/plugin-images` returns 404 on the registry.
+
+---
+
+## Decisions
+
+### D1 — Build-time generation with `sharp`
+Static output only, with no runtime image server. `sharp` is a regular `dependency`, not optional: the plugin is useless without it.
+
+### D2 — Core hook: `getAssets` (slice 1)
+A third optional plugin export, additive to the contract:
+
+```js
+export async function getAssets({ app, pagesData }) {
+    return [{ from: '/abs/path/to/.nera-cache/images/files', to: '_img' }]
+}
+```
+
+- Called **after** every plugin's `getAppData`/`getMetaData` has run, in plugin order, with the final `app`/`pagesData`. The plugin has done its work by then and knows which files it produced.
+- Returns an array of `{ from, to }`. `from` is an absolute file or directory. `to` is a path relative to `public/`.
+- Core copies all entries **after the theme's assets and before the site's assets**: theme → plugins → site. The site wins on a collision, consistent with "the site always overrides". No `.neraignore` filtering (the payload is plugin-controlled, like the theme pass, `ignoreBase = null`).
+- Runs before `rewriteAssetUrls` and `hashAssetUrls`, so `base_path` prefixing and `?v=` hashing cover plugin assets automatically.
+- Validation matches the other hooks. A non-array result is discarded with a warning. An entry with a missing `from`, an absolute `to`, or a `to` that escapes `public/` (`..`) is skipped with a warning. The build continues.
+- The hook is generic. Future plugins (OG-image generator, favicons, sitemap assets) use the same mechanism.
+
+Semver: **minor** for `@nera-static/core` (4.13.0).
+
+### D3 — Output URLs and file names
+- Default output path `/_img/` (config `output_path`).
+- File name: `<basename>-<hash8>-<width>.<ext>`. `hash8` is the first 8 hex chars of a sha256 over *source bytes + normalized transform params + plugin cache version*. Same input gives the same name, so URLs are stable across builds and safe to cache forever.
+
+### D4 — Cache
+- Location: `.nera-cache/images/` at the site root (config `cache_dir`). It holds `files/` (the variants, returned via `getAssets`) and `manifest.json` (key → `{ width, height, files[], color?, blur? }`).
+- A variant is only encoded when its file is missing. Every build re-hashes the source bytes. That is cheap compared to encoding; measure it in slice 7 and add an mtime+size shortcut only if needed.
+- **Pruning** (config `prune: true`, default): after a build, delete variants and manifest entries not used by this build. Builds are always full, so "unused this build" means "unused".
+- Add `.nera-cache` to the CLI's scaffold `_gitignore` (`nera-cli/template/_gitignore`) in slice 8. Document CI caching (`actions/cache` on `.nera-cache`) in the README.
+
+### D5 — Which images are processed
+- **Processed:** local URLs (root-absolute or page-relative) resolving to `.jpg/.jpeg/.png/.webp/.avif/.tif/.tiff` under the site assets folder, falling back to the theme's `assetsRoot`. `base_path` is stripped before resolving.
+- **Left untouched:** `.svg`, `.gif` (animation), external `http(s)://` and protocol-relative URLs, `data:` URIs, an `<img>` already inside `<picture>`, an `<img>` with a `srcset` already set, an `<img>` carrying `data-nera-skip` (the attribute is removed from output), and unresolvable files (warning naming the page and the URL, `<img>` left as-is).
+- Raw HTML `<img>` inside Markdown is treated like Markdown images. It is the same HTML by the time the plugin sees it.
+
+### D6 — Output contract
+- `<picture>` with one `<source>` per configured modern format, plus an `<img>` fallback in the **source's own format** (jpeg→jpeg, png→png, webp→webp, avif→jpeg). The fallback `src` points at a **processed** variant, never the original file.
+- `width`/`height` on `<img>` always reflect the largest emitted variant's intrinsic size (aspect ratio is what matters for CLS).
+- `loading="lazy"` + `decoding="async"` on every image, except the **first image of each page** when `eager_first: true` (default): it gets `loading="eager"` + `fetchpriority="high"` instead.
+- All existing attributes on the original `<img>` (`alt`, `class`, `id`, `title` unless consumed by D8, `data-*`) are preserved on the new `<img>`. A missing `alt` stays missing: that is `a11y-img-alt`'s job to report, not the plugin's to invent.
+- Widths are never upscaled. Candidates above the source width are dropped, and the source width itself is added if every configured width exceeds it.
+- Metadata: `sharp` applies EXIF orientation (`.rotate()`) and strips all metadata on output (its default; never call `.withMetadata()`). ICC is converted to sRGB.
+- BEM classes on the generated wrapper elements (`figure.nera-image`, `figcaption.nera-image__caption`) are part of the public contract. Renaming them later is a **major**.
+
+### D7 — Per-image options via query parameters (slice 4)
+Markdown attribute syntax would need a markdown-it plugin in core, and the plugin only sees HTML. Query strings survive rendering untouched, and they match Glide's URL-parameter model.
+
+| Param | Meaning | Example |
+|---|---|---|
+| `w` | max display width in px. Candidates: config widths `< w`, plus `w` and `2w` (retina), capped at source. Default `sizes` becomes `(min-width: {w}px) {w}px, 100vw` | `?w=800` |
+| `h` | target height (with `w`, implies a crop by `fit`) | `?w=800&h=450` |
+| `ratio` | crop to aspect ratio, `W:H` | `?ratio=16:9` |
+| `fit` | `cover` (default when cropping) / `contain` / `inside` | `?fit=contain` |
+| `focus` | crop focal point in percent, `x,y` (Glide `crop-x-y`); default `50,50`; `attention`/`entropy` map to sharp strategies | `?focus=30,60` |
+| `q` | quality override (all formats) | `?q=60` |
+| `formats` | override modern formats, `none` = plain `<img>` with `srcset` only | `?formats=webp` |
+| `sizes` | override `sizes` (URL-encoded) | `?sizes=50vw` |
+| `loading` | `eager` / `lazy`, overrides D6 | `?loading=eager` |
+| `skip` | leave this image completely untouched | `?skip` |
+
+Unknown parameters produce a warning (page + URL) and are ignored. All recognized parameters are removed from the emitted URLs. Invalid values (e.g. `w=abc`) produce a warning and fall back to defaults.
+
+### D8 — `<figure>` from the Markdown title (slice 4)
+`![alt](src "Caption")` sets `title="Caption"` on the `<img>`. With `figure: title` (default) that becomes:
+
+```html
+<figure class="nera-image"><picture>…</picture><figcaption class="nera-image__caption">Caption</figcaption></figure>
+```
+
+and the `title` attribute is dropped (a duplicated tooltip helps nobody). `figure: false` disables it. markdown-it wraps a lone image in `<p>`, and `<figure>` inside `<p>` is invalid HTML. When the image is the paragraph's only child, the plugin **replaces the `<p>`**. Otherwise (image inline with text) it emits no figure and keeps the title.
+
+### D9 — Frontmatter images (slice 5)
+Config `frontmatter_keys` (default `[image]`). For each listed key holding a local image path, the plugin generates variants and writes
+
+```js
+meta.images = {
+    image: {
+        src, srcset, sizes, width, height, type,       // fallback img
+        sources: [{ type: 'image/avif', srcset }, …],  // modern formats
+        og: { src, width, height },                    // when og preset enabled
+        color?, blur?                                   // when placeholders enabled
+    }
+}
+```
+
+**The original `meta.image` string is never modified.** Existing templates and plugins (`canonical-links`, social) keep working; replacing a string with an object would be a breaking change for every site. A shipped Pug mixin (`views/vendor/plugin-images/picture.pug`, published via `npm run publish-template` / `nera-images` bin) renders `+picture(meta.images.image, { alt, class, loading })`. That is pure markup from precomputed data, not render-time generation.
+
+The `og` preset (config `og: { width: 1200, height: 630, fit: cover }`, `og: false` disables it) produces one JPEG for `og:image`.
+
+### D10 — Placeholders (slice 6)
+Config `placeholder: none | color | blur` (default `none`).
+- `color`: dominant color (`sharp().stats().dominant`), emitted as `style="background-color:#rrggbb"` on `<img>`.
+- `blur`: a ~16 px wide WebP, base64-inlined as `background-image` + `background-size: cover`. Roughly 300–600 bytes of HTML per image, documented as a trade-off.
+- Inline `style` conflicts with a strict CSP (`style-src` without `'unsafe-inline'`). The README says so. That is why the default is `none`.
+
+### D11 — Keeping originals out of `public/`
+The plugin reads sources from `app.folders.assets` **regardless of `.neraignore`**. A site that lists its photo folder (e.g. `images`) in `.neraignore` publishes only the processed, metadata-stripped variants, and the originals with their EXIF/GPS never leave the repo. No extra config. The README documents this prominently, with the caveat that anything in that folder the plugin does not process (SVG, GIF, linked downloads) is then unpublished too.
+
+### D12 — Compatibility guard
+- `peerDependencies: { "@nera-static/core": ">=4.13.0" }`. npm reports an incompatible core at install time.
+- Runtime safety net: in `getMetaData`, after generating, set a flag. If core is older and never calls `getAssets`, pages would reference missing files. Detect this by checking core's version via `@nera-static/core/package.json` (exported) and **fail loudly** (throw with a message naming the required version) rather than shipping broken image URLs.
+
+### D13 — Concurrency and determinism
+- Encode with bounded concurrency (config `concurrency`, default `os.availableParallelism() - 1`, min 1) via a small internal queue (no extra dependency). The same source+params used on several pages is encoded once (in-flight promise map).
+- Output markup is deterministic (attribute order, srcset order ascending by width, source order = `formats` order).
+
+---
+
+## Configuration — `config/images.yaml`
+
+Optional. Every key has a default, and the plugin works with no file at all. `getConfig` returns `{}` when the file is missing, so every key needs a JS fallback.
+
+```yaml
+# Which modern formats get a <source>, in order of preference.
+formats: [avif, webp]
+# Candidate widths for srcset (px). Never upscaled.
+widths: [480, 800, 1200, 1600]
+# Default sizes attribute.
+sizes: 100vw
+# Encoder quality per format.
+quality:
+    avif: 50
+    webp: 75
+    jpeg: 78
+    png: 80        # palette quantisation off; png stays lossless-ish
+# First image on each page: eager + fetchpriority=high.
+eager_first: true
+# "title" turns ![alt](src "Caption") into <figure>; false disables.
+figure: title
+# Frontmatter keys holding an image path → meta.images.<key>.
+frontmatter_keys: [image]
+# og:image preset for frontmatter images; false disables.
+og:
+    width: 1200
+    height: 630
+    fit: cover
+# none | color | blur
+placeholder: none
+# Public URL path for generated files.
+output_path: /_img
+# Cache folder (site-root relative) and pruning of unused variants.
+cache_dir: .nera-cache/images
+prune: true
+# Parallel encodes; default = CPU count - 1.
+# concurrency: 4
+```
+
+---
+
+## Slices
+
+Each slice ends with: `npx vitest run && npm run lint` green, the ROADMAP checkboxes ticked, a dated note, and a commit on `main`. Until slice 8, nothing is published. The plugin is developed and field-tested against a local core via `npm install ../generator --no-save`, as `nera-cli` did with validate.
+
+### Slice 0 — Repository scaffold
+- [x] `nera-plugin-images/` (this folder): `git init -b main`, `package.json` (`@nera-static/plugin-images`, `0.0.0`, `"type": "module"`, `engines.node >=20.18.1` (cheerio's floor, not sharp's `>=20.9.0`; see the done-note), `exports`, `files`, `publishConfig.access: public`, `peerDependencies` per D12), `index.js` stub exporting nothing yet, `LICENSE` (MIT), `CHANGELOG.md` (Keep a Changelog, `## [Unreleased]`), `README.md` stub linking https://nera.js.org.
+- [x] Copy `eslint.config.js`, `.github/workflows/test.yml` and `publish.yml` verbatim from `nera-plugin-link-attributes` (identical across the fleet). Copy `.husky/` plus a `prepare: husky` script.
+- [x] Dependencies: `sharp`, `cheerio`, `@nera-static/plugin-utils`. Dev: `vitest`, `eslint`, `husky`, `@nera-static/core` (for integration tests).
+- [x] `npm install` → **commit the lockfile in the first commit** (CLAUDE.md ordering rule 1: before `test.yml` can pass).
+- [x] `test/fixtures/make-images.js`: generates fixture images with sharp at test time (a 2000×1500 JPEG with EXIF orientation 6 + GPS, a 300×200 PNG with alpha, an SVG, a GIF), so no binary blobs land in git.
+- [x] Do **not** create the GitHub repo yet (outward-facing; slice 8).
+
+**Done 2026-10-09.** Scaffold committed as the first commit on `main`, lockfile included. 5 tests (fixture self-checks), lint clean. What was learned or decided differently:
+
+- **`engines.node` is `>=20.18.1`, not `>=20.9.0`** (decided with the user). `sharp` alone needs `>=20.9.0`, but `cheerio` 1.2 is a runtime dependency and needs `>=20.18.1`. Same floor as `plugin-link-attributes`, for the same reason.
+- **Peer + dev on core coexist.** `peerDependencies: { "@nera-static/core": ">=4.13.0" }` (D12) sits next to `devDependencies: { "@nera-static/core": "^4.12.0" }`. npm lets the root's dev edge win, so the install resolves to 4.12.0 without complaint. With the peer alone, `npm install` fails with `ETARGET` (4.13.0 does not exist yet). **Slice 1/3:** after core 4.13.0 ships, raise the devDependency to `^4.13.0`. Until then, integration tests run against `npm install ../generator --no-save`.
+- **Generate the lockfile with npm ≥ 10.9 (Node 22).** On Node 20.20 (npm 10.8.2), a fresh `npm install` crashes in Arborist with `Cannot read properties of null (reading 'edgesOut')` while resolving vitest 5's peer set. `npm ci` from the committed lockfile and `npx vitest run` both work on Node 20, which is what the CI matrix needs. vitest 5 declares `node ^22.12.0 || …`, but it runs on Node 20 in practice, as across the fleet.
+- `npm ls` lists `@img/sharp-wasm32`, `@emnapi/runtime` and `tslib` as *extraneous*. They are sharp's optional WASM fallback and are harmless.
+- `npm audit` reports 11 findings (5 moderate, 6 high), all reached through the **dev** dependency `@nera-static/core` (gray-matter/js-yaml, markdown-it-meta, cpy/globby/micromatch/braces). `npm audit --omit=dev` is clean. Fixing them belongs in core, not here.
+- **Fixtures** (`test/fixtures/make-images.js`, `makeImages(dir)` + `FIXTURES`): `photo.jpg` gets GPS via `withExif({ IFD3: … })` and orientation via `withMetadata({ orientation: 6 })`. The fixture code may use `withMetadata`; D6 forbids it only in the plugin's output pipeline. The photo is red on the left and blue on the right, so slice 2 can check *where* a color lands after rotation, not only the swapped dimensions. GPS presence is checked by looking for TIFF tag `0x8825` (GPS IFD pointer) in the EXIF buffer, in either byte order. A negative control (EXIF without GPS) returns false. Slice 2 can reuse this check to prove stripping. `anim.gif` is a real 2-frame animation (`sharp([...], { join: { animated: true } })`). `test/fixtures.test.js` verifies that every fixture carries what it claims.
+- `files` currently lists only `index.js` + `CHANGELOG.md`. **Slice 2 must add `src`** (and slice 5 `bin`/`views`), or the modules will be missing from the tarball.
+- `test.yml`/`publish.yml`/`eslint.config.js`/`.husky/` (`pre-commit` lint, `pre-push` vitest) are verbatim fleet copies, `.gitignore` too. The `test.yml` comment about cheerio applies here as well. `LICENSE` is MIT, `2026`.
+
+### Slice 1 — Core: `getAssets` hook (`generator/`, core 4.13.0)
+- [ ] `src/setup-plugins.js#getPluginsData`: after the existing hook loop, call each plugin's optional `getAssets({ app, pagesData })` in plugin order, validate per D2, return `assets: [{ from, to, plugin }]` alongside `app`/`pagesData`.
+- [ ] `src/index.js`: copy `data.assets` between the theme pass and the site pass (`copyFolder` for directories with `ignoreBase = null`, a plain file copy for files, `to` resolved under `dist`).
+- [ ] Tests: hook absent (byte-identical build), file entry, directory entry, site file overrides plugin file, theme file overridden by plugin file, invalid return (non-array) → warning, `to` escaping `public/` → skipped + warning, `base_path` + `asset_hashing` applied to plugin assets.
+- [ ] Docs: plugin contract in `generator/README.md` (next to `getAppData`/`getMetaData`), `nera-website/pages/{,de/,es/}docs/plugins.md` (trilingual). The local-plugin tutorial needs no change.
+- [ ] Workspace `CLAUDE.md` "Plugin contract" section: add the third hook.
+- [ ] `npm version minor --no-git-tag-version`, CHANGELOG `### Added`, commit, tag `v4.13.0`, push → CI publishes. **Confirm with the user before pushing the tag.** The website doc change is pushed in the same session (plain `git push`).
+
+### Slice 2 — Plugin engine (no HTML yet)
+Pure modules, unit-tested in isolation:
+- [ ] `src/config.js`: read `config/images.yaml` inside the hook (not at module scope), merge over defaults, validate types (warn + default on bad values).
+- [ ] `src/resolve-source.js`: URL → absolute file (D5 order: site assets, then theme `assetsRoot`). Strips `base_path`, query and hash; resolves page-relative URLs against `meta.href`. Rejects traversal outside the roots.
+- [ ] `src/transform.js`: `planVariants(sourceMeta, options)` → list of `{ width, height, format, quality, crop }` (pure, the main unit-test target: no upscaling, `w`/`2w` logic, ratio/fit/focus math). `encodeVariant(file, plan)` → sharp pipeline (`rotate`, resize, sRGB, format, quality, metadata stripped).
+- [ ] `src/cache.js`: key hashing (D3), manifest read/write (atomic write via temp+rename), `has`/`get`/`put`, `prune(usedKeys)`.
+- [ ] `src/queue.js`: bounded concurrency + in-flight dedupe (D13).
+- [ ] Tests: orientation-6 fixture comes out upright with swapped dimensions; output has no EXIF/GPS (`sharp(out).metadata()` → no `exif`); PNG alpha preserved in webp/avif; second run encodes nothing (spy on the encoder); prune removes exactly the unused files.
+
+### Slice 3 — Content pass + first end-to-end build
+- [ ] `src/rewrite-html.js`: cheerio pass over `content` (D5 skip rules, D6 markup, eager-first per page).
+- [ ] `index.js`: `async getMetaData({ app, pagesData })` (collect images, plan, encode via queue, rewrite content, record used keys), `async getAssets()` (prune, return `[{ from: <cache>/files, to: output_path }]`), the D12 runtime guard.
+- [ ] Integration test: build a throwaway site in a temp dir with core's `run()` (pattern from `nera-plugin-tags`' integration tests), assert `public/_img/*` exists, the HTML has `<picture>`, `width`/`height` are correct, the second build encodes 0 files, and `base_path` prefixes `srcset`.
+- [ ] Snapshot test of the emitted markup for one image (guards the D6 contract).
+
+### Slice 4 — Query parameters, focal point, `<figure>`
+- [ ] Parse and strip parameters (D7), feed `planVariants`, derive the default `sizes` from `w`.
+- [ ] Focal-point crop (`focus=x,y` → sharp `extract` after resize-to-cover computed from the point; `attention`/`entropy` → `sharp.strategy`).
+- [ ] `<figure>`/`<figcaption>` from the title (D8), including the `<p>` replacement rule and the inline-text exception.
+- [ ] Tests per parameter, unknown/invalid parameter warnings, figure on/off, inline image keeps the title.
+
+### Slice 5 — Frontmatter images + template
+- [ ] `frontmatter_keys` → `meta.images.<key>` (D9), `og` preset.
+- [ ] `views/picture.pug` mixin + `bin/publish-template.js` (`publishTemplates()` from plugin-utils) + `"bin": { "nera-images": … }` + `publish-template` script. Test that the mixin renders from a fixture `meta.images` entry (cwd-relative pug path, like the other template tests).
+- [ ] Tests: `meta.image` string untouched; missing/external frontmatter image → no `meta.images` entry + warning only for missing local files.
+
+### Slice 6 — Placeholders
+- [ ] `placeholder: color | blur` (D10), stored in the manifest so cached builds don't recompute.
+- [ ] Applied in both the content pass and `meta.images`.
+- [ ] Tests: color is a valid `#rrggbb`, blur data URI under 1 KB, `none` emits no `style`.
+
+### Slice 7 — Field test + README
+- [ ] Field test against `../nera-websites/michael-becker-berlin.de` (blog images under `theme/assets/images/blog/2026/`, the ZerpenSafari example) with `npm install ../nera-plugin-images --no-save`. Record: cold build time, warm build time, `public/` size before/after, Lighthouse/LCP spot check of one blog post, `nera check` (validate output rules) still clean.
+- [ ] Also a `.neraignore` run (D11): confirm originals are absent from `public/` and no page references them.
+- [ ] Fix what the field test finds and record the numbers here.
+- [ ] README complete: what it does, before/after markup, config reference, query parameters, frontmatter + mixin, `.neraignore` privacy recipe, CI caching snippet (`actions/cache` for `.nera-cache`), CSP note for placeholders, requires core ≥ 4.13.0.
+
+### Slice 8 — Release
+- [ ] **Confirm with the user**, then create the GitHub repo `seebaermichi/nera-plugin-images` (`gh repo create`), push `main`, enable private vulnerability reporting, add the `protect-main` ruleset + secret-scanning push protection, add the Dependabot config (match the fleet, see the memory note "Dependabot posture").
+- [ ] Version `1.0.0` + dated CHANGELOG. **Bootstrap publish by hand** (`npm publish`, the one documented exception for a brand-new package), then configure the Trusted Publisher on npmjs.com (`publish.yml`) so 1.0.1+ go through CI OIDC. Tag `v1.0.0` on the published commit and push it. That tag's CI publish run will fail on the already-existing version. That is expected and harmless; note it in the slice's done-note. Check how `core`/`nera`/`validate` were bootstrapped in July 2026 (`generator/ROADMAP-core.md`) and follow the same procedure if it differs.
+- [ ] `generator/PLUGINS.md`: add alphabetically, bump the count (14 → 15).
+- [ ] `nera-website/pages/{,de/,es/}plugins/index.md`: add to the `plugins:` frontmatter list with translated descriptions (no raw `: `). `nera build` + `nera validate`, push.
+- [ ] `nera-cli/template/_gitignore`: add `.nera-cache` (patch release of `@nera-static/nera`).
+- [ ] Workspace `CLAUDE.md`: move this from "Planned work" to a shipped note; update the folder list (now 15 plugins).
+
+---
+
+## Semver notes for later changes
+Per CLAUDE.md. **Major:** renaming `meta.images` fields, the `figure.nera-image` BEM classes, query parameter names or config keys, or changing default output markup structure. **Minor:** a new parameter/config key/format with a backward-compatible default. Changing default `widths`/`quality` is a **minor** (output files change, contract doesn't), noted in the CHANGELOG.
+
+## Not in scope (decided 2026-10-09)
+- Generating images from **Pug layouts at render time** (`+picture('/hero.jpg')` with on-the-fly encoding). Pug renders synchronously after the plugin stage, so this would need a post-render hook in core. Frontmatter images (D9) cover the common hero/cover case.
+- Art direction (different crops per breakpoint), remote/external images, animated GIF → video conversion.
+
+## Acceptance criteria
+1. A site with no `config/images.yaml` gets `<picture>` + AVIF/WebP + `srcset` + `width`/`height` + lazy loading for every local raster image in Markdown, with zero author changes.
+2. No emitted file contains EXIF/GPS metadata, and phone photos come out upright.
+3. A warm rebuild with unchanged images encodes nothing.
+4. `base_path` and `asset_hashing` sites produce correct URLs for every variant.
+5. Query parameters, `<figure>` captions, `meta.images` + mixin, and placeholders behave per D7–D10.
+6. A themeless site without the plugin builds byte-identically on core 4.13.0 (hook is additive).
+7. `nera check` on the field-test site reports no new findings.
