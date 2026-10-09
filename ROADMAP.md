@@ -233,7 +233,7 @@ Each slice ends with: `npx vitest run && npm run lint` green, the ROADMAP checkb
 - [x] Tests: hook absent (byte-identical build), file entry, directory entry, site file overrides plugin file, theme file overridden by plugin file, invalid return (non-array) → warning, `to` escaping `public/` → skipped + warning, `base_path` + `asset_hashing` applied to plugin assets.
 - [x] Docs: plugin contract in `generator/README.md` (next to `getAppData`/`getMetaData`), `nera-website/pages/{,de/,es/}docs/plugins.md` (trilingual). The local-plugin tutorial needs no change.
 - [x] Workspace `CLAUDE.md` "Plugin contract" section: add the third hook.
-- [ ] `npm version minor --no-git-tag-version`, CHANGELOG `### Added`, commit, tag `v4.13.0`, push → CI publishes. **Confirm with the user before pushing the tag.** The website doc change is pushed in the same session (plain `git push`).
+- [x] `npm version minor --no-git-tag-version`, CHANGELOG `### Added`, commit, tag `v4.13.0`, push → CI publishes. **Confirm with the user before pushing the tag.** The website doc change is pushed in the same session (plain `git push`).
 
 **Done 2026-10-09.** Core 4.13.0 committed on `generator` `main` (version bump + CHANGELOG in the same commit); 128 tests (16 new in `src/test/plugin-assets.test.js`), lint clean. Website docs (en/de/es) built and `nera validate` clean. What was learned or decided where D2 left a gap (none of it contradicts D2):
 
@@ -244,7 +244,7 @@ Each slice ends with: `npx vitest run && npm run lint` green, the ROADMAP checkb
 - **A `getAssets` that throws fails the build**, exactly like a throwing `getAppData`/`getMetaData` today. Only a wrong return type is soft. Slice 3's plugin should therefore catch its own per-image errors.
 - **"Byte-identical" test** compares a build with no plugins against the same build plus a plugin that has no `getAssets`. The `base_path` + `asset_hashing` test puts an `<img src srcset>` pointing at plugin files into the page and checks for `/sub/_img/pic.png?v=<sha256-10 of the plugin file>` in both attributes, which proves the hashing pass read the plugin's copy in `public/`.
 - A local theme in a test needs a `views/` folder even when the test only cares about assets (`resolveTheme` throws otherwise).
-- **Release status:** see the tag step below and the git log of `generator/`. The devDependency `^4.12.0` → `^4.13.0` raise (slice 0 note) waits until 4.13.0 is on npm.
+- **Released.** Pushed after the user confirmed: `v4.13.0` tag → CI publish run succeeded (`+ @nera-static/core@4.13.0`, with provenance); the CI log is the proof, since the registry's `latest` still read 4.12.0 for a few minutes afterwards (CDN lag, not a failure). Website docs pushed with a plain `git push`. The devDependency `^4.12.0` → `^4.13.0` raise (slice 0 note) waits until 4.13.0 is on npm.
 
 ### Slice 2 — Plugin engine (no HTML yet)
 Pure modules, unit-tested in isolation:
