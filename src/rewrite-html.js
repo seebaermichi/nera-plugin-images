@@ -133,18 +133,50 @@ export function buildPicture($, original, image, { outputPath, sizes, eager }) {
     return picture.append(img)
 }
 
+const CAPTION_ATTR = 'title'
+
+/**
+ * The `<p>` an image may turn into a `<figure>` (D8): its parent paragraph,
+ * when the image is that paragraph's only content (whitespace aside) and the
+ * paragraph carries no attributes of its own. markdown-it wraps a lone
+ * image in a bare `<p>`, and `<figure>` inside `<p>` is invalid HTML, so the
+ * figure replaces the paragraph. Anywhere else (inline with text, inside a
+ * link, in raw HTML) the context may not allow a `<figure>`, so there is none.
+ *
+ * @returns {import('cheerio').Cheerio|null}
+ */
+function figureSlot(node) {
+    const parent = node.parent()
+    if (!parent.is('p') || Object.keys(parent.attr() || {}).length > 0) return null
+    const alone = parent.contents().toArray().every((child) =>
+        child === node[0] || (child.type === 'text' && child.data.trim() === '')
+    )
+    return alone ? parent : null
+}
+
 /**
  * Rewrite every processable `<img>` in `html`.
  *
  * Left untouched (D5): an `<img>` inside `<picture>`, one with a `srcset`
  * already set, and one carrying `data-nera-skip` (the attribute itself is
- * removed). Everything else is offered to `handle(src)`, which returns the
- * generated image or `null` to leave the `<img>` as it is (external, SVG,
- * missing file, encode error: the callback decides and warns).
+ * removed). Everything else is offered to `handle(src)`, which answers with
+ *
+ * - `null`: leave the `<img>` as it is (external, SVG, missing file, encode
+ *   error: the callback decides and warns);
+ * - `{ src }`: leave it in place, but with this `src` (`?skip`, D7, whose
+ *   parameters are stripped);
+ * - `{ image, sizes?, loading? }`: the generated image, with this image's
+ *   `sizes` (default: `options.sizes`) and an explicit `loading` (`?loading`,
+ *   which overrides the author's attribute and the eager-first choice).
  *
  * The first image actually rewritten on the page is the eager one when
  * `eagerFirst` is set (D6, decided 2026-10-09: an untouched SVG or external
  * image before it does not count).
+ *
+ * With `figure: 'title'`, a rewritten image with a non-empty `title` that is
+ * alone in its paragraph becomes `figure.nera-image` with the title as
+ * `figcaption.nera-image__caption`, and the `title` attribute is dropped
+ * (D8). Otherwise the title stays on the `<img>`.
  *
  * Images are generated concurrently; the markup is assembled afterwards in
  * document order, so the result does not depend on encode timing.
@@ -155,10 +187,11 @@ export function buildPicture($, original, image, { outputPath, sizes, eager }) {
  * @param {string} options.outputPath public URL path, e.g. `/_img`
  * @param {string} options.sizes default `sizes`
  * @param {boolean} options.eagerFirst
+ * @param {'title'|false} [options.figure]
  * @returns {Promise<{ html: string, count: number }>} `html` is the input
  *     unchanged (same string) when nothing was touched
  */
-export async function rewriteHtml(html, { handle, outputPath, sizes, eagerFirst }) {
+export async function rewriteHtml(html, { handle, outputPath, sizes, eagerFirst, figure = false }) {
     if (typeof html !== 'string' || !/<img\b/i.test(html)) {
         return { html, count: 0 }
     }
@@ -179,15 +212,45 @@ export async function rewriteHtml(html, { handle, outputPath, sizes, eagerFirst 
         candidates.push(node)
     })
 
-    const images = await Promise.all(candidates.map((node) => handle(node.attr('src') ?? '')))
+    const results = await Promise.all(candidates.map((node) => handle(node.attr('src') ?? '')))
 
     let count = 0
     candidates.forEach((node, i) => {
-        const image = images[i]
-        if (!image) return
+        const result = results[i]
+        if (!result) return
+
+        if (!result.image) {
+            if (result.src !== node.attr('src')) {
+                node.attr('src', result.src)
+                changed = true
+            }
+            return
+        }
+
+        const original = { ...node.attr() }
+        if (result.loading) original.loading = result.loading
+
+        const title = original[CAPTION_ATTR]
+        const slot = figure === 'title' && title && title.trim() !== '' ? figureSlot(node) : null
+        if (slot) delete original[CAPTION_ATTR]
 
         const eager = eagerFirst && count === 0
-        node.replaceWith(buildPicture($, { ...node.attr() }, image, { outputPath, sizes, eager }))
+        const picture = buildPicture($, original, result.image, {
+            outputPath,
+            sizes: result.sizes || sizes,
+            eager,
+        })
+
+        if (slot) {
+            slot.replaceWith(
+                $('<figure>')
+                    .addClass('nera-image')
+                    .append(picture)
+                    .append($('<figcaption>').addClass('nera-image__caption').text(title))
+            )
+        } else {
+            node.replaceWith(picture)
+        }
         count++
         changed = true
     })

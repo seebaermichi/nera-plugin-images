@@ -11,8 +11,9 @@ import { openCache } from './src/cache.js'
 import { loadConfig } from './src/config.js'
 import { createGenerator } from './src/generate.js'
 import { assertCoreVersion, coreVersion } from './src/guard.js'
+import { parseParams, sizesFor, stripParams } from './src/params.js'
 import { createQueue } from './src/queue.js'
-import { resolveSource, sourceRoots } from './src/resolve-source.js'
+import { resolveSource, sourceRoots, splitUrl } from './src/resolve-source.js'
 import { rewriteHtml } from './src/rewrite-html.js'
 import { warn } from './src/warn.js'
 
@@ -75,15 +76,32 @@ export async function getMetaData({ app, pagesData }) {
                 basePath: app.basePath || '',
                 roots,
             })
+            // Not a local URL: neither the file nor the query is ours.
+            if (['empty', 'external', 'data'].includes(resolved.skip)) return null
+
+            const params = parseParams(splitUrl(src.trim()).search)
+            if (params.skip) return { src: stripParams(src) }
+
             if (resolved.skip) {
                 if (resolved.skip === 'missing' || resolved.skip === 'outside') {
                     warn(`${href}: image not found, left as is: ${src}`)
                 }
                 return null
             }
+            for (const message of params.warnings) {
+                warn(`${href}: ${message}: ${src}`)
+            }
             ensureCore()
             try {
-                return await generator.generate(resolved.file, options)
+                const image = await generator.generate(resolved.file, {
+                    ...options,
+                    ...params.options,
+                })
+                return {
+                    image,
+                    sizes: sizesFor(params, config.sizes),
+                    loading: params.loading,
+                }
             } catch (err) {
                 warn(`${href}: could not process ${src}, left as is (${err.message})`)
                 return null
@@ -95,6 +113,7 @@ export async function getMetaData({ app, pagesData }) {
             outputPath: config.output_path,
             sizes: config.sizes,
             eagerFirst: config.eager_first,
+            figure: config.figure,
         })
         images += count
         result.push(html === page.content ? page : { ...page, content: html })

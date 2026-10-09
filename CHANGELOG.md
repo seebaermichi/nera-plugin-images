@@ -26,3 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `fetchpriority="high"`). `getAssets` (core >= 4.13.0) prunes the cache and
     hands the variants to core for `public/<output_path>`. The build fails
     with a clear message when core is too old to call `getAssets`
+-   Per-image options as query parameters on the image URL
+    (`![alt](/images/a.jpg?w=800&ratio=16:9)`): `w`, `h`, `ratio`, `fit`,
+    `focus` (percent or `attention`/`entropy`), `q`, `formats`, `sizes`,
+    `loading` and `skip`. Recognized parameters never reach the emitted URLs;
+    unknown or invalid ones warn with the page and the URL and fall back to
+    the defaults. `?w` also derives the default `sizes`
+-   Captions: `![alt](src "Caption")` alone in its paragraph becomes
+    `<figure class="nera-image">` with
+    `<figcaption class="nera-image__caption">`, replacing the paragraph
+    (config `figure: title`, the default; `figure: false` disables it)

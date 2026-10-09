@@ -52,7 +52,7 @@ export function isInside(root, file) {
 /**
  * Split `src` into path, query and hash without touching their encoding.
  */
-function splitUrl(src) {
+export function splitUrl(src) {
     const hashAt = src.indexOf('#')
     const hash = hashAt === -1 ? '' : src.slice(hashAt)
     const rest = hashAt === -1 ? src : src.slice(0, hashAt)

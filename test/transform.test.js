@@ -298,6 +298,23 @@ describe('readSourceMeta + encodeVariant', () => {
         expect(dominant.b).toBeLessThan(60)
     })
 
+    it('crops with a sharp strategy at the planned size', async () => {
+        const source = await readSourceMeta(paths.photo)
+        const [variant] = planVariants(source, {
+            ...config,
+            formats: [],
+            ratio: 16 / 9,
+            focus: 'attention',
+        })
+        expect(variant.crop).toEqual({ strategy: 'attention' })
+
+        const file = out('attention.jpg')
+        await encodeVariant(paths.photo, variant, file)
+        const meta = await sharp(file).metadata()
+        expect([meta.width, meta.height]).toEqual([variant.width, variant.height])
+        expect(variant.width / variant.height).toBeCloseTo(16 / 9, 1)
+    })
+
     it('keeps PNG alpha in webp, avif and png', async () => {
         const source = await readSourceMeta(paths.alpha)
         const variants = planVariants(source, config)

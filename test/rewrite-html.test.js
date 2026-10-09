@@ -17,16 +17,18 @@ function fakeImage(base = 'photo', { formats = ['avif', 'webp', 'jpeg'], ext } =
     return { width: 1200, height: 900, variants }
 }
 
+const hit = (...args) => ({ image: fakeImage(...args) })
+
 const defaults = { outputPath: '/_img', sizes: '100vw', eagerFirst: true }
 
-const rewrite = (html, handle = async () => fakeImage(), options = {}) =>
+const rewrite = (html, handle = async () => hit(), options = {}) =>
     rewriteHtml(html, { ...defaults, handle, ...options })
 
 describe('rewriteHtml markup (D6 contract)', () => {
     it('emits the documented <picture> for one Markdown image', async () => {
         const { html, count } = await rewrite(
             '<p><img src="/images/photo.jpg" alt="A photo"></p>',
-            async () => fakeImage(),
+            async () => hit(),
             { eagerFirst: false }
         )
 
@@ -48,7 +50,7 @@ describe('rewriteHtml markup (D6 contract)', () => {
     })
 
     it('does not count an untouched image as the first one', async () => {
-        const handle = async (src) => (src.endsWith('.svg') ? null : fakeImage())
+        const handle = async (src) => (src.endsWith('.svg') ? null : hit())
         const { html } = await rewrite('<img src="/logo.svg"><img src="/a.jpg">', handle)
         const $ = load(html, null, false)
 
@@ -66,7 +68,7 @@ describe('rewriteHtml markup (D6 contract)', () => {
 
     it('emits a bare <img> with srcset when there is no modern format', async () => {
         const { html } = await rewrite('<img src="/a.jpg" alt="x">', async () =>
-            fakeImage('a', { formats: ['jpeg'] })
+            hit('a', { formats: ['jpeg'] })
         )
         const $ = load(html, null, false)
 
@@ -78,7 +80,7 @@ describe('rewriteHtml markup (D6 contract)', () => {
 
     it('uses the last format as the fallback (a WebP source has no webp <source>)', async () => {
         const { html } = await rewrite('<img src="/a.webp">', async () =>
-            fakeImage('a', { formats: ['avif', 'webp'] })
+            hit('a', { formats: ['avif', 'webp'] })
         )
         const $ = load(html, null, false)
 
@@ -145,7 +147,7 @@ describe('imgAttributes', () => {
 
 describe('rewriteHtml skip rules (D5)', () => {
     it('leaves an <img> inside <picture> alone', async () => {
-        const handle = vi.fn(async () => fakeImage())
+        const handle = vi.fn(async () => hit())
         const input = '<picture><source srcset="/a.webp"><img src="/a.jpg"></picture>'
         const { html, count } = await rewrite(input, handle)
 
@@ -155,7 +157,7 @@ describe('rewriteHtml skip rules (D5)', () => {
     })
 
     it('leaves an <img> with its own srcset alone', async () => {
-        const handle = vi.fn(async () => fakeImage())
+        const handle = vi.fn(async () => hit())
         const input = '<img src="/a.jpg" srcset="/a.jpg 1x, /a@2x.jpg 2x">'
         const { html } = await rewrite(input, handle)
 
@@ -164,7 +166,7 @@ describe('rewriteHtml skip rules (D5)', () => {
     })
 
     it('leaves data-nera-skip images alone and removes the attribute', async () => {
-        const handle = vi.fn(async () => fakeImage())
+        const handle = vi.fn(async () => hit())
         const { html, count } = await rewrite('<img src="/a.jpg" data-nera-skip alt="x">', handle)
 
         expect(handle).not.toHaveBeenCalled()
@@ -198,7 +200,7 @@ describe('rewriteHtml skip rules (D5)', () => {
         const delays = { '/a.jpg': 30, '/b.jpg': 0 }
         const handle = (src) =>
             new Promise((resolve) =>
-                setTimeout(() => resolve(fakeImage(src.slice(1, 2))), delays[src])
+                setTimeout(() => resolve(hit(src.slice(1, 2))), delays[src])
             )
         const { html } = await rewrite('<img src="/a.jpg"><img src="/b.jpg">', handle)
         const imgs = load(html, null, false)('img')
@@ -206,5 +208,124 @@ describe('rewriteHtml skip rules (D5)', () => {
         expect(imgs.eq(0).attr('src')).toMatch(/^\/_img\/a-/)
         expect(imgs.eq(0).attr('loading')).toBe('eager')
         expect(imgs.eq(1).attr('src')).toMatch(/^\/_img\/b-/)
+    })
+})
+
+describe('rewriteHtml per-image options (D7)', () => {
+    it('uses the sizes the handler returns for this image', async () => {
+        const { html } = await rewrite('<img src="/a.jpg"><img src="/b.jpg">', async (src) =>
+            src === '/a.jpg' ? { ...hit(), sizes: '50vw' } : hit()
+        )
+        const $ = load(html, null, false)
+
+        expect($('picture').eq(0).find('source, img').map((_, el) => el.attribs.sizes).get())
+            .toEqual(['50vw', '50vw', '50vw'])
+        expect($('picture').eq(1).find('img').attr('sizes')).toBe('100vw')
+    })
+
+    it('lets loading from the handler override the eager-first choice and the author', async () => {
+        const { html } = await rewrite(
+            '<img src="/a.jpg"><img src="/b.jpg" loading="lazy">',
+            async (src) => ({ ...hit(), loading: src === '/a.jpg' ? 'lazy' : 'eager' })
+        )
+        const imgs = load(html, null, false)('img')
+
+        expect(imgs.eq(0).attr()).toMatchObject({ loading: 'lazy', decoding: 'async' })
+        expect(imgs.eq(0).attr('fetchpriority')).toBeUndefined()
+        expect(imgs.eq(1).attr()).toMatchObject({ loading: 'eager', fetchpriority: 'high' })
+    })
+
+    it('puts a { src } answer in place and leaves everything else as it was', async () => {
+        const { html, count } = await rewrite(
+            '<p><img src="/a.jpg?skip" alt="x"><img src="/b.jpg"></p>',
+            async (src) => (src === '/a.jpg?skip' ? { src: '/a.jpg' } : hit())
+        )
+        const $ = load(html, null, false)
+
+        expect(count).toBe(1)
+        expect($('p > img').first().attr()).toEqual({ src: '/a.jpg', alt: 'x' })
+        // A skipped image is not rewritten, so it is not the eager one.
+        expect($('picture img').attr('loading')).toBe('eager')
+    })
+
+    it('returns the original string when a { src } answer changes nothing', async () => {
+        const input = '<p><img src="/a.jpg"  alt="x"></p>'
+        const { html } = await rewrite(input, async () => ({ src: '/a.jpg' }))
+        expect(html).toBe(input)
+    })
+})
+
+describe('rewriteHtml <figure> from the title (D8)', () => {
+    const figure = (html, handle, options = {}) =>
+        rewrite(html, handle, { eagerFirst: false, figure: 'title', ...options })
+
+    it('replaces the paragraph of a lone captioned image with a figure', async () => {
+        const { html } = await figure('<p><img src="/a.jpg" alt="A" title="The caption"></p>', async () =>
+            hit('a', { formats: ['webp', 'jpeg'] })
+        )
+
+        // eslint-disable-next-line quotes -- vitest writes inline snapshots in backticks
+        expect(html).toMatchInlineSnapshot(`"<figure class="nera-image"><picture><source type="image/webp" srcset="/_img/a-0123abcd-480.webp 480w, /_img/a-0123abcd-800.webp 800w, /_img/a-0123abcd-1200.webp 1200w" sizes="100vw"><img src="/_img/a-0123abcd-1200.jpg" srcset="/_img/a-0123abcd-480.jpg 480w, /_img/a-0123abcd-800.jpg 800w, /_img/a-0123abcd-1200.jpg 1200w" sizes="100vw" width="1200" height="900" alt="A" loading="lazy" decoding="async"></picture><figcaption class="nera-image__caption">The caption</figcaption></figure>"`)
+    })
+
+    it('ignores whitespace around the image in its paragraph', async () => {
+        const { html } = await figure('<p>\n  <img src="/a.jpg" title="Cap">\n</p><p>after</p>')
+        const $ = load(html, null, false)
+
+        expect($('figure.nera-image > figcaption').text()).toBe('Cap')
+        expect($('p')).toHaveLength(1)
+        expect($('img').attr('title')).toBeUndefined()
+    })
+
+    it('wraps a bare <img> (no modern format) too', async () => {
+        const { html } = await figure('<p><img src="/a.jpg" title="Cap"></p>', async () =>
+            hit('a', { formats: ['jpeg'] })
+        )
+        const $ = load(html, null, false)
+        expect($('figure > img + figcaption')).toHaveLength(1)
+    })
+
+    it('escapes the caption text', async () => {
+        const { html } = await figure('<p><img src="/a.jpg" title="&lt;b&gt;bold&lt;/b&gt; &amp; co"></p>')
+        const $ = load(html, null, false)
+
+        expect($('figcaption').text()).toBe('<b>bold</b> & co')
+        expect($('figcaption b')).toHaveLength(0)
+    })
+
+    it.each([
+        ['inline with text', '<p>See <img src="/a.jpg" title="Cap"> here</p>'],
+        ['inside a link', '<p><a href="/x"><img src="/a.jpg" title="Cap"></a></p>'],
+        ['next to another image', '<p><img src="/a.jpg" title="Cap"><img src="/b.jpg"></p>'],
+        ['outside a paragraph', '<div><img src="/a.jpg" title="Cap"></div>'],
+        ['in a paragraph with attributes', '<p class="lead"><img src="/a.jpg" title="Cap"></p>'],
+    ])('emits no figure and keeps the title %s', async (_, input) => {
+        const { html } = await figure(input)
+        const $ = load(html, null, false)
+
+        expect($('figure')).toHaveLength(0)
+        expect($('picture img[src^="/_img/photo"]').first().attr('title')).toBe('Cap')
+    })
+
+    it('emits no figure for an empty title, and keeps it', async () => {
+        const { html } = await figure('<p><img src="/a.jpg" title=" "></p>')
+        const $ = load(html, null, false)
+
+        expect($('figure')).toHaveLength(0)
+        expect($('img').attr('title')).toBe(' ')
+    })
+
+    it('keeps the title and emits no figure with figure: false', async () => {
+        const { html } = await figure('<p><img src="/a.jpg" title="Cap"></p>', undefined, { figure: false })
+        const $ = load(html, null, false)
+
+        expect($('figure')).toHaveLength(0)
+        expect($('p > picture img').attr('title')).toBe('Cap')
+    })
+
+    it('leaves an image the handler declines in its paragraph, title and all', async () => {
+        const input = '<p><img src="/logo.svg" title="Cap"></p>'
+        const { html } = await figure(input, async () => null)
+        expect(html).toBe(input)
     })
 })

@@ -233,6 +233,44 @@ describe('a site with images', () => {
     }, 60_000)
 })
 
+describe('query parameters and captions from Markdown', () => {
+    it('reads the parameters and the title through markdown-it', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nera-images-params-'))
+        try {
+            makeSite(root)
+            await makeImages(path.join(root, 'assets', 'images'))
+            write(
+                path.join(root, 'pages', 'index.md'),
+                page(
+                    [
+                        '![Wide](/images/photo.jpg?w=400&ratio=16:9&focus=50,0&formats=webp "A caption")',
+                        '',
+                        'Inline ![Alpha](/images/alpha.png?skip "Kept title") image.',
+                    ].join('\n')
+                )
+            )
+            await build(root)
+
+            const $ = html(root, 'index.html')
+            const figure = $('main > figure.nera-image')
+            const img = figure.find('picture img')
+
+            expect(figure.find('figcaption.nera-image__caption').text()).toBe('A caption')
+            expect(img.attr('title')).toBeUndefined()
+            // Upright 1500×2000, cropped to 16:9 → 1500×844; w=400 and 2w=800.
+            expect([img.attr('width'), img.attr('height')]).toEqual(['800', '450'])
+            expect(urlsOf(img.attr('srcset')).map((u) => u.match(/-(\d+)\.jpg$/)[1])).toEqual(['400', '800'])
+            expect(figure.find('source').map((_, el) => el.attribs.type).get()).toEqual(['image/webp'])
+            expect(img.attr('sizes')).toBe('(min-width: 400px) 400px, 100vw')
+            expect($('main p img').attr()).toMatchObject({ src: '/images/alpha.png', title: 'Kept title' })
+            expect(logged(warn)).not.toMatch(/plugin-images/)
+            expect(fs.readdirSync(path.join(root, 'public', '_img'))).toHaveLength(4)
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true })
+        }
+    }, 60_000)
+})
+
 describe('a site without images', () => {
     it('creates no cache and no _img folder', async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nera-images-none-'))

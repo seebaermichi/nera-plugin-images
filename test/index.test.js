@@ -1,6 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { load } from 'cheerio'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { makeImages } from './fixtures/make-images.js'
 
@@ -105,5 +106,85 @@ describe('getMetaData / getAssets', () => {
         expect(result[1]).not.toBe(changed)
         expect(result[1].meta).toBe(changed.meta)
         await getAssets()
+    })
+})
+
+describe('query parameters and figure (D7, D8)', () => {
+    const run = async (content, href = '/index.html') => {
+        const [page] = await getMetaData({ app: app(), pagesData: [pageWith(content, href)] })
+        await getAssets()
+        return load(page.content, null, false)
+    }
+    const warnings = () => warn.mock.calls.map((c) => c.join(' ')).join('\n')
+
+    it('feeds the parameters into the plan, derives sizes from w and drops them from the URLs', async () => {
+        const $ = await run('<img src="/images/alpha.png?w=200&amp;ratio=1:1&amp;q=60">')
+        const img = $('picture img')
+
+        // 300×200 cropped square → 200×200; w and 2w are both capped at 200.
+        expect([img.attr('width'), img.attr('height')]).toEqual(['200', '200'])
+        expect(img.attr('srcset')).toMatch(/^\/_img\/alpha-[0-9a-f]{8}-200\.png 200w$/)
+        expect(img.attr('sizes')).toBe('(min-width: 200px) 200px, 100vw')
+        expect($.html()).not.toContain('?')
+        expect(warnings()).toBe('')
+    })
+
+    it('gives a different quality its own files', async () => {
+        const plain = (await run('<img src="/images/alpha.png">'))('source').first().attr('srcset')
+        const q = (await run('<img src="/images/alpha.png?q=20">'))('source').first().attr('srcset')
+        expect(q).not.toBe(plain)
+    })
+
+    it('honours formats, sizes and loading', async () => {
+        const $ = await run(
+            '<img src="/images/alpha.png?formats=webp"><img src="/images/alpha.png?formats=none&amp;sizes=50vw&amp;loading=eager">'
+        )
+        const [first, second] = [$('img').eq(0), $('img').eq(1)]
+
+        expect($('picture source').map((_, el) => el.attribs.type).get()).toEqual(['image/webp'])
+        expect(second.parent().is('picture')).toBe(false)
+        expect(second.attr()).toMatchObject({ sizes: '50vw', loading: 'eager', fetchpriority: 'high' })
+        expect(first.attr('loading')).toBe('eager')
+    })
+
+    it('leaves ?skip images in place without the parameter, even when the file is missing', async () => {
+        const $ = await run('<img src="/images/missing.jpg?skip"><img src="/images/alpha.png?skip&amp;v=2" alt="a">')
+
+        expect($('img').map((_, el) => el.attribs.src).get()).toEqual([
+            '/images/missing.jpg',
+            '/images/alpha.png?v=2',
+        ])
+        expect($('picture')).toHaveLength(0)
+        expect(warnings()).toBe('')
+        expect(fs.existsSync(path.join(root, '.nera-cache'))).toBe(false)
+    })
+
+    it('warns about unknown and invalid parameters with the page and the URL, and still processes', async () => {
+        const $ = await run('<img src="/images/alpha.png?foo=1&amp;w=abc">', '/blog/x.html')
+
+        expect($('picture')).toHaveLength(1)
+        expect($('img').attr('sizes')).toBe('100vw')
+        expect(warnings()).toContain(
+            'plugin-images: /blog/x.html: unknown parameter "foo" ignored: /images/alpha.png?foo=1&w=abc'
+        )
+        expect(warnings()).toContain('/blog/x.html: invalid w "abc", using the default: /images/alpha.png?foo=1&w=abc')
+    })
+
+    it('does not read the query of a URL that is not local', async () => {
+        const input = '<img src="https://example.com/a.jpg?skip&amp;foo=1">'
+        const $ = await run(input)
+        expect($('img').attr('src')).toBe('https://example.com/a.jpg?skip&foo=1')
+        expect(warnings()).toBe('')
+    })
+
+    it('turns a captioned lone image into a figure by default, and not with figure: false', async () => {
+        const content = '<p><img src="/images/alpha.png" alt="a" title="Cap"></p>'
+        expect((await run(content))('figure.nera-image figcaption').text()).toBe('Cap')
+
+        fs.mkdirSync(path.join(root, 'config'))
+        fs.writeFileSync(path.join(root, 'config', 'images.yaml'), 'figure: false\n')
+        const $ = await run(content)
+        expect($('figure')).toHaveLength(0)
+        expect($('img').attr('title')).toBe('Cap')
     })
 })
