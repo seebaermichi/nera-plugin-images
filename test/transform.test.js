@@ -103,6 +103,14 @@ describe('planVariants: formats and quality', () => {
         expect([...new Set(none.map((v) => v.format))]).toEqual(['jpeg'])
     })
 
+    it('forces the fallback format when asked (the og preset is always JPEG)', () => {
+        const variants = planVariants(
+            { width: 300, height: 200, format: 'png' },
+            { ...config, formats: [], fallback: 'jpeg' }
+        )
+        expect(variants.map((v) => [v.format, v.quality])).toEqual([['jpeg', 78]])
+    })
+
     it('takes quality per format, and q overrides all of them', () => {
         const variants = planVariants(jpeg(500, 500), config)
         expect(Object.fromEntries(variants.map((v) => [v.format, v.quality]))).toEqual({

@@ -86,6 +86,36 @@ export function imgAttributes(original, image, eager) {
 }
 
 /**
+ * The data behind one image's markup: the fallback `<img>` (`src`, `srcset`,
+ * `sizes`, `width`, `height`, `type`) and one `{ type, srcset }` per modern
+ * format, in `formats` order. The content pass builds its `<picture>` from it,
+ * and the frontmatter pass hands it to templates as `meta.images.<key>` (D9),
+ * so both always describe the same files the same way.
+ *
+ * @param {{ variants: object[], width: number, height: number }} image
+ *     what `generate` returned (variants carry their cache `file`)
+ * @param {{ outputPath: string, sizes: string }} options
+ */
+export function pictureData(image, { outputPath, sizes }) {
+    const groups = groupByFormat(image.variants)
+    const fallback = groups[groups.length - 1]
+    const largest = fallback.variants[fallback.variants.length - 1]
+
+    return {
+        src: publicUrl(outputPath, largest.file),
+        srcset: srcsetOf(fallback.variants, outputPath),
+        sizes,
+        width: image.width,
+        height: image.height,
+        type: MIME_TYPES[fallback.format],
+        sources: groups.slice(0, -1).map((group) => ({
+            type: MIME_TYPES[group.format],
+            srcset: srcsetOf(group.variants, outputPath),
+        })),
+    }
+}
+
+/**
  * Build the replacement for one `<img>` (D6).
  *
  * With at least one modern format, a `<picture>` with one `<source>` per
@@ -99,36 +129,13 @@ export function imgAttributes(original, image, eager) {
  * @param {{ outputPath: string, sizes: string, eager: boolean }} options
  */
 export function buildPicture($, original, image, { outputPath, sizes, eager }) {
-    const groups = groupByFormat(image.variants)
-    const fallback = groups[groups.length - 1]
-    const largest = fallback.variants[fallback.variants.length - 1]
-
-    const img = $('<img>').attr(
-        imgAttributes(
-            original,
-            {
-                src: publicUrl(outputPath, largest.file),
-                srcset: srcsetOf(fallback.variants, outputPath),
-                sizes,
-                width: image.width,
-                height: image.height,
-            },
-            eager
-        )
-    )
-
-    const modern = groups.slice(0, -1)
-    if (modern.length === 0) return img
+    const data = pictureData(image, { outputPath, sizes })
+    const img = $('<img>').attr(imgAttributes(original, data, eager))
+    if (data.sources.length === 0) return img
 
     const picture = $('<picture>')
-    for (const group of modern) {
-        picture.append(
-            $('<source>').attr({
-                type: MIME_TYPES[group.format],
-                srcset: srcsetOf(group.variants, outputPath),
-                sizes,
-            })
-        )
+    for (const source of data.sources) {
+        picture.append($('<source>').attr({ type: source.type, srcset: source.srcset, sizes }))
     }
     return picture.append(img)
 }

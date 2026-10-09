@@ -2,6 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { load } from 'cheerio'
+import sharp from 'sharp'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { makeImages } from './fixtures/make-images.js'
 
@@ -186,5 +187,109 @@ describe('query parameters and figure (D7, D8)', () => {
         const $ = await run(content)
         expect($('figure')).toHaveLength(0)
         expect($('img').attr('title')).toBe('Cap')
+    })
+})
+
+describe('frontmatter images (D9)', () => {
+    const pageMeta = (meta, content = '<p>text</p>') => ({ content, meta: { href: '/index.html', ...meta } })
+    const run = async (meta, content) => {
+        const page = pageMeta(meta, content)
+        const [result] = await getMetaData({ app: app(), pagesData: [page] })
+        const assets = await getAssets()
+        return { page, result, assets }
+    }
+    const warnings = () => warn.mock.calls.map((c) => c.join(' ')).join('\n')
+    const cached = (url) => path.join(root, '.nera-cache', 'images', 'files', path.basename(url))
+
+    it('prepares meta.images.image with the fallback, the modern sources and the og JPEG', async () => {
+        const { page, result, assets } = await run({ image: '/images/alpha.png' })
+        const entry = result.meta.images.image
+
+        expect(result.meta.image).toBe('/images/alpha.png')
+        expect(page.meta.images).toBeUndefined()
+        expect(result.content).toBe(page.content)
+        expect(entry).toEqual({
+            src: expect.stringMatching(/^\/_img\/alpha-[0-9a-f]{8}-300\.png$/),
+            srcset: expect.stringMatching(/^\/_img\/alpha-[0-9a-f]{8}-300\.png 300w$/),
+            sizes: '100vw',
+            width: 300,
+            height: 200,
+            type: 'image/png',
+            sources: [
+                { type: 'image/avif', srcset: expect.stringMatching(/\.avif 300w$/) },
+                { type: 'image/webp', srcset: expect.stringMatching(/\.webp 300w$/) },
+            ],
+            og: {
+                src: expect.stringMatching(/^\/_img\/alpha-[0-9a-f]{8}-300\.jpg$/),
+                width: 300,
+                height: 158,
+            },
+        })
+        // Every URL is a real file the cache hands to core.
+        expect(assets).toHaveLength(1)
+        for (const url of [entry.src, entry.og.src]) expect(fs.existsSync(cached(url))).toBe(true)
+        expect(warnings()).toBe('')
+    })
+
+    it('crops the og JPEG to the preset size, never upscaled, from the frontmatter focus', async () => {
+        const { result } = await run({ image: '/images/photo.jpg?focus=0,0' })
+        const { og } = result.meta.images.image
+
+        expect([og.width, og.height]).toEqual([1200, 630])
+        const meta = await sharp(cached(og.src)).metadata()
+        expect([meta.format, meta.width, meta.height, meta.exif]).toEqual(['jpeg', 1200, 630, undefined])
+    })
+
+    it('reads query parameters on the frontmatter path like on a Markdown image', async () => {
+        const { result } = await run({ image: 'images/photo.jpg?w=400&ratio=1:1&formats=webp' })
+        const entry = result.meta.images.image
+
+        expect([entry.width, entry.height]).toEqual([800, 800])
+        expect(entry.sizes).toBe('(min-width: 400px) 400px, 100vw')
+        expect(entry.sources.map((s) => s.type)).toEqual(['image/webp'])
+        // The og preset keeps its own geometry.
+        expect([entry.og.width, entry.og.height]).toEqual([1200, 630])
+        expect(warnings()).toBe('')
+    })
+
+    it('honours frontmatter_keys and og: false', async () => {
+        fs.mkdirSync(path.join(root, 'config'))
+        fs.writeFileSync(path.join(root, 'config', 'images.yaml'), 'frontmatter_keys: [cover]\nog: false\n')
+
+        const { result } = await run({ image: '/images/alpha.png', cover: '/images/alpha.png' })
+        expect(Object.keys(result.meta.images)).toEqual(['cover'])
+        expect(result.meta.images.cover.og).toBeUndefined()
+    })
+
+    it('warns only for a missing local file; external, SVG and ?skip get no entry silently', async () => {
+        for (const image of ['https://example.com/a.jpg', '/images/logo.svg', '/images/alpha.png?skip']) {
+            const { page, result } = await run({ image })
+            expect(result).toBe(page)
+        }
+        expect(warnings()).toBe('')
+
+        const { result } = await run({ image: '/images/nope.jpg' }, '<p>text</p>')
+        expect(result.meta.images).toBeUndefined()
+        expect(warnings()).toContain('plugin-images: /index.html: frontmatter image not found, left as is: /images/nope.jpg')
+        expect(fs.existsSync(path.join(root, '.nera-cache'))).toBe(false)
+    })
+
+    it('warns that ?loading does nothing on a frontmatter image', async () => {
+        const { result } = await run({ image: '/images/alpha.png?loading=eager' })
+        expect(result.meta.images.image).toBeDefined()
+        expect(warnings()).toContain('/index.html: loading has no effect on a frontmatter image, ignored: /images/alpha.png?loading=eager')
+    })
+
+    it('counts frontmatter images in the build line and leaves the content pass alone', async () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+        const { result } = await run({ image: '/images/alpha.png' }, '<img src="/images/alpha.png" alt="a">')
+
+        expect(result.content).toContain('loading="eager"')
+        expect(log.mock.calls.join('\n')).toMatch(/plugin-images: 2 image\(s\)/)
+    })
+
+    it('runs the D12 guard for frontmatter images too', async () => {
+        version.value = '4.12.0'
+        await expect(run({ image: '/images/alpha.png' })).rejects.toThrow(/too old/)
     })
 })

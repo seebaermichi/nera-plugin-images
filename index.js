@@ -2,19 +2,21 @@
 //
 // `getMetaData` finds every local raster image in the rendered pages,
 // generates its variants into the cache and rewrites the `<img>` as
-// `<picture>` markup. `getAssets` (core >= 4.13.0) then prunes the cache and
+// `<picture>` markup; frontmatter images get the same variants as data in
+// `meta.images.<key>`, for the `+picture` mixin. `getAssets` (core >= 4.13.0) then prunes the cache and
 // hands its files to core, which copies them to `public/<output_path>`.
 // See ROADMAP.md for the decisions (D1–D13) behind each step.
 import fs from 'fs'
 import path from 'path'
 import { openCache } from './src/cache.js'
 import { loadConfig } from './src/config.js'
+import { frontmatterImages } from './src/frontmatter.js'
 import { createGenerator } from './src/generate.js'
 import { assertCoreVersion, coreVersion } from './src/guard.js'
 import { parseParams, sizesFor, stripParams } from './src/params.js'
 import { createQueue } from './src/queue.js'
 import { resolveSource, sourceRoots, splitUrl } from './src/resolve-source.js'
-import { rewriteHtml } from './src/rewrite-html.js'
+import { pictureData, publicUrl, rewriteHtml } from './src/rewrite-html.js'
 import { warn } from './src/warn.js'
 
 // What `getMetaData` leaves for `getAssets` in the same build. Core calls the
@@ -63,6 +65,35 @@ export async function getMetaData({ app, pagesData }) {
     }
     current = null
 
+    // What one URL on one page means: `null` (not ours, or left as is with a
+    // warning), `{ skip }` (`?skip`, with the recognized parameters stripped)
+    // or `{ file, params }`, ready to generate. Shared by both passes so a
+    // frontmatter path reads exactly like a Markdown image URL.
+    const prepare = (src, href, label) => {
+        const resolved = resolveSource(src, {
+            pageHref: href,
+            basePath: app.basePath || '',
+            roots,
+        })
+        // Not a local URL: neither the file nor the query is ours.
+        if (['empty', 'external', 'data'].includes(resolved.skip)) return null
+
+        const params = parseParams(splitUrl(src.trim()).search)
+        if (params.skip) return { skip: stripParams(src) }
+
+        if (resolved.skip) {
+            if (resolved.skip === 'missing' || resolved.skip === 'outside') {
+                warn(`${href}: ${label}not found, left as is: ${src}`)
+            }
+            return null
+        }
+        for (const message of params.warnings) {
+            warn(`${href}: ${message}: ${src}`)
+        }
+        ensureCore()
+        return { file: resolved.file, params }
+    }
+
     let images = 0
     const result = []
     // Pages one after another, a page's images concurrently: the queue bounds
@@ -71,36 +102,17 @@ export async function getMetaData({ app, pagesData }) {
         const href = page.meta?.href || '/index.html'
 
         const handle = async (src) => {
-            const resolved = resolveSource(src, {
-                pageHref: href,
-                basePath: app.basePath || '',
-                roots,
-            })
-            // Not a local URL: neither the file nor the query is ours.
-            if (['empty', 'external', 'data'].includes(resolved.skip)) return null
-
-            const params = parseParams(splitUrl(src.trim()).search)
-            if (params.skip) return { src: stripParams(src) }
-
-            if (resolved.skip) {
-                if (resolved.skip === 'missing' || resolved.skip === 'outside') {
-                    warn(`${href}: image not found, left as is: ${src}`)
-                }
-                return null
-            }
-            for (const message of params.warnings) {
-                warn(`${href}: ${message}: ${src}`)
-            }
-            ensureCore()
+            const prepared = prepare(src, href, 'image ')
+            if (!prepared || prepared.skip) return prepared && { src: prepared.skip }
             try {
-                const image = await generator.generate(resolved.file, {
+                const image = await generator.generate(prepared.file, {
                     ...options,
-                    ...params.options,
+                    ...prepared.params.options,
                 })
                 return {
                     image,
-                    sizes: sizesFor(params, config.sizes),
-                    loading: params.loading,
+                    sizes: sizesFor(prepared.params, config.sizes),
+                    loading: prepared.params.loading,
                 }
             } catch (err) {
                 warn(`${href}: could not process ${src}, left as is (${err.message})`)
@@ -108,15 +120,54 @@ export async function getMetaData({ app, pagesData }) {
             }
         }
 
-        const { html, count } = await rewriteHtml(page.content, {
-            handle,
-            outputPath: config.output_path,
-            sizes: config.sizes,
-            eagerFirst: config.eager_first,
-            figure: config.figure,
-        })
-        images += count
-        result.push(html === page.content ? page : { ...page, content: html })
+        // D9: `meta.images.<key>` from the frontmatter keys. The `<img>`
+        // attributes a template sets itself (`loading`, `alt`) are the mixin's
+        // business, so `?loading` has nothing to act on here.
+        const prepareFrontmatter = async (key, src) => {
+            const prepared = prepare(src, href, `frontmatter ${key} `)
+            if (!prepared || prepared.skip) return null
+            const { params } = prepared
+            if (params.loading) {
+                warn(`${href}: loading has no effect on a frontmatter image, ignored: ${src}`)
+            }
+            try {
+                const image = await generator.generate(prepared.file, {
+                    ...options,
+                    ...params.options,
+                })
+                const entry = pictureData(image, {
+                    outputPath: config.output_path,
+                    sizes: sizesFor(params, config.sizes),
+                })
+                if (config.og) {
+                    entry.og = await ogImage(generator, prepared.file, config, params)
+                }
+                return entry
+            } catch (err) {
+                warn(`${href}: could not process frontmatter ${key} ${src} (${err.message})`)
+                return null
+            }
+        }
+
+        const [rewritten, frontmatter] = await Promise.all([
+            rewriteHtml(page.content, {
+                handle,
+                outputPath: config.output_path,
+                sizes: config.sizes,
+                eagerFirst: config.eager_first,
+                figure: config.figure,
+            }),
+            frontmatterImages(page.meta, {
+                keys: config.frontmatter_keys,
+                prepare: prepareFrontmatter,
+            }),
+        ])
+        images += rewritten.count + frontmatter.count
+
+        const changed = rewritten.html !== page.content || frontmatter.meta !== page.meta
+        result.push(
+            changed ? { ...page, content: rewritten.html, meta: frontmatter.meta } : page
+        )
     }
 
     current = { config, cache, generator }
@@ -126,6 +177,32 @@ export async function getMetaData({ app, pagesData }) {
         )
     }
     return result
+}
+
+/**
+ * The og preset (D9): one JPEG at `og.width` × `og.height` with `og.fit`,
+ * never upscaled. Only the frontmatter path's `focus` and `q` carry over; its
+ * own geometry (`w`, `ratio`, …) is for the page, not for the social card.
+ */
+async function ogImage(generator, file, config, params) {
+    const { width, height, fit } = config.og
+    const { focus, q } = params.options
+    const image = await generator.generate(file, {
+        widths: [width],
+        formats: [],
+        quality: config.quality,
+        ratio: width / height,
+        fit,
+        focus,
+        q,
+        fallback: 'jpeg',
+    })
+    const [variant] = image.variants
+    return {
+        src: publicUrl(config.output_path, variant.file),
+        width: variant.width,
+        height: variant.height,
+    }
 }
 
 export async function getAssets() {

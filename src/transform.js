@@ -125,10 +125,12 @@ function sizer(source, geo) {
  * scales to fit within it. `w` + `h` take precedence over `ratio`.
  *
  * Formats: one set per modern format, then the fallback (D6). A modern format
- * equal to the fallback is produced once, as the fallback.
+ * equal to the fallback is produced once, as the fallback. `fallback` forces
+ * the fallback format instead of deriving it from the source (the og preset,
+ * D9, is always JPEG).
  *
  * @param {{ width: number, height: number, format: string }} source oriented
- * @param {object} options `{ widths, formats, quality, w?, h?, ratio?, fit?, focus?, q? }`
+ * @param {object} options `{ widths, formats, quality, w?, h?, ratio?, fit?, focus?, q?, fallback? }`
  * @returns {Array<{ width, height, format, quality, fit, crop, aspect }>}
  *     modern formats in `formats` order, fallback last, each ascending by width
  */
@@ -154,7 +156,7 @@ export function planVariants(source, options) {
         if (!sizes.some((s) => s.width === dims.width)) sizes.push(dims)
     }
 
-    const fallback = fallbackFormat(source.format)
+    const fallback = options.fallback || fallbackFormat(source.format)
     const order = [...formats.filter((f) => f !== fallback), fallback]
 
     return order.flatMap((format) =>

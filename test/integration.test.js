@@ -271,6 +271,66 @@ describe('query parameters and captions from Markdown', () => {
     }, 60_000)
 })
 
+describe('a frontmatter image through the +picture mixin', () => {
+    it('renders meta.images.image in a layout, with base_path, and keeps meta.image as written', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nera-images-frontmatter-'))
+        try {
+            makeSite(root, { appYaml: 'base_path: /sub\n' })
+            await makeImages(path.join(root, 'assets', 'images'))
+            // What `npm run publish-template` puts there.
+            write(
+                path.join(root, 'views', 'vendor', 'plugin-images', 'picture.pug'),
+                fs.readFileSync(path.resolve(path.dirname(pluginEntry), 'views', 'picture.pug'), 'utf-8')
+            )
+            write(
+                path.join(root, 'views', 'hero.pug'),
+                [
+                    'include /vendor/plugin-images/picture',
+                    'doctype html',
+                    'html',
+                    '  head',
+                    '    meta(property="og:image" content=meta.image)',
+                    '    if meta.images && meta.images.image',
+                    '      meta(name="og-file" content=meta.images.image.og.src)',
+                    '  body',
+                    '    header',
+                    '      +picture(meta.images && meta.images.image, { alt: meta.title, loading: \'eager\' })',
+                    '    main!= content',
+                ].join('\n')
+            )
+            write(
+                path.join(root, 'pages', 'index.md'),
+                '---\ntitle: Hero\nlayout: hero.pug\nimage: /images/photo.jpg\n---\nText.\n'
+            )
+            write(path.join(root, 'pages', 'none.md'), '---\ntitle: None\nlayout: hero.pug\n---\nText.\n')
+            await build(root)
+
+            const $ = html(root, 'index.html')
+            const img = $('header picture img')
+            const urls = [
+                ...$('header source, header img').map((_, el) => urlsOf(el.attribs.srcset)).get(),
+                img.attr('src'),
+            ]
+
+            expect(img.attr()).toMatchObject({ alt: 'Hero', width: '1200', height: '1600', loading: 'eager' })
+            expect($('header source').map((_, el) => el.attribs.type).get()).toEqual(['image/avif', 'image/webp'])
+            for (const url of urls) {
+                expect(url).toMatch(/^\/sub\/_img\//)
+                expect(fs.existsSync(path.join(root, 'public', url.slice('/sub'.length)))).toBe(true)
+            }
+            // The original string is untouched; the og file is published too.
+            expect($('meta[property="og:image"]').attr('content')).toBe('/images/photo.jpg')
+            const og = $('meta[name="og-file"]').attr('content')
+            expect(await sharp(path.join(root, 'public', og)).metadata()).toMatchObject({ width: 1200, height: 630, format: 'jpeg' })
+
+            expect(html(root, 'none.html')('header').html().trim()).toBe('')
+            expect(logged(warn)).not.toMatch(/plugin-images/)
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true })
+        }
+    }, 60_000)
+})
+
 describe('a site without images', () => {
     it('creates no cache and no _img folder', async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nera-images-none-'))

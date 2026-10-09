@@ -36,3 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `<figure class="nera-image">` with
     `<figcaption class="nera-image__caption">`, replacing the paragraph
     (config `figure: title`, the default; `figure: false` disables it)
+-   Frontmatter images: for every key in `frontmatter_keys` (default
+    `[image]`) holding a local image path, `meta.images.<key>` carries the
+    precomputed `src`, `srcset`, `sizes`, `width`, `height`, `type` and the
+    modern-format `sources`, plus `og` (one JPEG at the `og` preset,
+    1200×630 cover by default; `og: false` disables it). The original
+    `meta.<key>` string is never modified. Query parameters work on the
+    frontmatter path as on a Markdown image
+-   The `+picture(meta.images.image, { alt, class, sizes, loading })` Pug
+    mixin (`views/picture.pug`), published to
+    `views/vendor/plugin-images/` with `npm run publish-template` or the
+    `nera-images` bin

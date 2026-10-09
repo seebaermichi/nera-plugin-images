@@ -1,0 +1,38 @@
+//- @nera-static/plugin-images: the markup for a frontmatter image.
+//-
+//-     include /vendor/plugin-images/picture
+//-     +picture(meta.images && meta.images.image, { alt: meta.title })
+//-
+//- `image` is a `meta.images.<key>` entry the plugin prepared at build time
+//- (pure markup from precomputed data, nothing is encoded here). Renders
+//- nothing when it is missing, so a page without the frontmatter key just
+//- has no image. Options: `alt`, `class`, `sizes` (overrides the entry's),
+//- `loading` (`lazy` by default; `eager` adds `fetchpriority="high"` for a
+//- hero image). Extra attributes go onto the <img>:
+//- `+picture(image, { alt: '' })(data-zoom)`.
+mixin picture-img(image, opts, sizes)
+    - const eager = opts.loading === 'eager'
+    img(
+        src=image.src
+        srcset=image.srcset
+        sizes=sizes
+        width=image.width
+        height=image.height
+        alt=opts.alt
+        class=opts.class
+        loading=eager ? 'eager' : 'lazy'
+        decoding=eager ? undefined : 'async'
+        fetchpriority=eager ? 'high' : undefined
+    )&attributes(attributes)
+
+mixin picture(image, options)
+    if image
+        - const opts = options || {}
+        - const sizes = opts.sizes || image.sizes
+        if image.sources && image.sources.length
+            picture
+                each source in image.sources
+                    source(type=source.type srcset=source.srcset sizes=sizes)
+                +picture-img(image, opts, sizes)&attributes(attributes)
+        else
+            +picture-img(image, opts, sizes)&attributes(attributes)
