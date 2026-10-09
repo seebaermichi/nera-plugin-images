@@ -228,12 +228,23 @@ Each slice ends with: `npx vitest run && npm run lint` green, the ROADMAP checkb
 - `test.yml`/`publish.yml`/`eslint.config.js`/`.husky/` (`pre-commit` lint, `pre-push` vitest) are verbatim fleet copies, `.gitignore` too. The `test.yml` comment about cheerio applies here as well. `LICENSE` is MIT, `2026`.
 
 ### Slice 1 — Core: `getAssets` hook (`generator/`, core 4.13.0)
-- [ ] `src/setup-plugins.js#getPluginsData`: after the existing hook loop, call each plugin's optional `getAssets({ app, pagesData })` in plugin order, validate per D2, return `assets: [{ from, to, plugin }]` alongside `app`/`pagesData`.
-- [ ] `src/index.js`: copy `data.assets` between the theme pass and the site pass (`copyFolder` for directories with `ignoreBase = null`, a plain file copy for files, `to` resolved under `dist`).
-- [ ] Tests: hook absent (byte-identical build), file entry, directory entry, site file overrides plugin file, theme file overridden by plugin file, invalid return (non-array) → warning, `to` escaping `public/` → skipped + warning, `base_path` + `asset_hashing` applied to plugin assets.
-- [ ] Docs: plugin contract in `generator/README.md` (next to `getAppData`/`getMetaData`), `nera-website/pages/{,de/,es/}docs/plugins.md` (trilingual). The local-plugin tutorial needs no change.
-- [ ] Workspace `CLAUDE.md` "Plugin contract" section: add the third hook.
+- [x] `src/setup-plugins.js#getPluginsData`: after the existing hook loop, call each plugin's optional `getAssets({ app, pagesData })` in plugin order, validate per D2, return `assets: [{ from, to, plugin }]` alongside `app`/`pagesData`.
+- [x] `src/index.js`: copy `data.assets` between the theme pass and the site pass (`copyFolder` for directories with `ignoreBase = null`, a plain file copy for files, `to` resolved under `dist`).
+- [x] Tests: hook absent (byte-identical build), file entry, directory entry, site file overrides plugin file, theme file overridden by plugin file, invalid return (non-array) → warning, `to` escaping `public/` → skipped + warning, `base_path` + `asset_hashing` applied to plugin assets.
+- [x] Docs: plugin contract in `generator/README.md` (next to `getAppData`/`getMetaData`), `nera-website/pages/{,de/,es/}docs/plugins.md` (trilingual). The local-plugin tutorial needs no change.
+- [x] Workspace `CLAUDE.md` "Plugin contract" section: add the third hook.
 - [ ] `npm version minor --no-git-tag-version`, CHANGELOG `### Added`, commit, tag `v4.13.0`, push → CI publishes. **Confirm with the user before pushing the tag.** The website doc change is pushed in the same session (plain `git push`).
+
+**Done 2026-10-09.** Core 4.13.0 committed on `generator` `main` (version bump + CHANGELOG in the same commit); 128 tests (16 new in `src/test/plugin-assets.test.js`), lint clean. Website docs (en/de/es) built and `nera validate` clean. What was learned or decided where D2 left a gap (none of it contradicts D2):
+
+- **Where things live.** Validation is `validateAsset(entry)` in `src/setup-plugins.js` (exported from that module, not from the `src/index.js` barrel); `getPluginsData` now also returns `assets: [{ from, to, plugin }]` (`[]` when no plugin has the hook). The copy is `copyPluginAssets(assets, dist)` in `src/render.js`, called from `src/index.js` between the theme pass and the site pass.
+- **`to` for a file entry is the target *file* path** (`{ from: '/x/og.png', to: 'og/home.png' }`); for a directory it is the folder the *contents* go into (via `copyFolder(from, target, null)`, so dotfiles copy too). D2 did not say which. A file entry with `to: ''` (public/ itself) is skipped with a warning.
+- **`to` is normalized** with `path.posix.normalize` after turning `\` into `/`: trailing slash dropped, `''`/`'.'` mean public/ itself, `a/../../x` counts as escaping. Absolute means `/…`, a Windows drive (`C:…`) or `path.isAbsolute`.
+- **`from` must be absolute**, not just present (D2 says "absolute"; now enforced, a relative `from` is skipped with a warning). A `from` that is well-formed but **does not exist** is skipped *at copy time* with a warning (`asset not found`), so a plugin's empty cache on a first build cannot fail the build.
+- **A `getAssets` that throws fails the build**, exactly like a throwing `getAppData`/`getMetaData` today. Only a wrong return type is soft. Slice 3's plugin should therefore catch its own per-image errors.
+- **"Byte-identical" test** compares a build with no plugins against the same build plus a plugin that has no `getAssets`. The `base_path` + `asset_hashing` test puts an `<img src srcset>` pointing at plugin files into the page and checks for `/sub/_img/pic.png?v=<sha256-10 of the plugin file>` in both attributes, which proves the hashing pass read the plugin's copy in `public/`.
+- A local theme in a test needs a `views/` folder even when the test only cares about assets (`resolveTheme` throws otherwise).
+- **Release status:** see the tag step below and the git log of `generator/`. The devDependency `^4.12.0` → `^4.13.0` raise (slice 0 note) waits until 4.13.0 is on npm.
 
 ### Slice 2 — Plugin engine (no HTML yet)
 Pure modules, unit-tested in isolation:
