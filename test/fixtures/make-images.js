@@ -27,6 +27,14 @@ export const FIXTURES = {
     gif: { file: 'anim.gif', width: 40, height: 40, pages: 2 },
 }
 
+// TIFF tag 0x8825 is the pointer to the GPS IFD, in either byte order.
+export function hasGpsIfd(exif) {
+    return (
+        exif.includes(Buffer.from([0x88, 0x25])) ||
+        exif.includes(Buffer.from([0x25, 0x88]))
+    )
+}
+
 function solid(width, height, background) {
     return sharp({ create: { width, height, channels: 3, background } })
 }

@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import sharp from 'sharp'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { FIXTURES, makeImages } from './fixtures/make-images.js'
+import { FIXTURES, hasGpsIfd, makeImages } from './fixtures/make-images.js'
 
 // Later slices prove the plugin strips EXIF/GPS, rotates phone photos and
 // keeps alpha. Those proofs are only worth something if the fixtures really
@@ -20,14 +20,6 @@ beforeAll(async () => {
 afterAll(() => {
     fs.rmSync(dir, { recursive: true, force: true })
 })
-
-// TIFF tag 0x8825 is the pointer to the GPS IFD, in either byte order.
-function hasGpsIfd(exif) {
-    return (
-        exif.includes(Buffer.from([0x88, 0x25])) ||
-        exif.includes(Buffer.from([0x25, 0x88]))
-    )
-}
 
 describe('makeImages', () => {
     it('writes every fixture into the given directory', () => {
