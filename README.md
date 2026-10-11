@@ -1,5 +1,8 @@
 # @nera-static/plugin-images
 
+[![Test](https://github.com/seebaermichi/nera-plugin-images/actions/workflows/test.yml/badge.svg)](https://github.com/seebaermichi/nera-plugin-images/actions/workflows/test.yml)
+[![npm version](https://img.shields.io/npm/v/@nera-static/plugin-images)](https://www.npmjs.com/package/@nera-static/plugin-images)
+
 A plugin for the [Nera](https://github.com/seebaermichi/nera) static site generator that turns every local image in your Markdown into responsive, modern-format markup at build time: `<picture>` with AVIF/WebP, `srcset`/`sizes`, `width`/`height`, lazy loading, and camera metadata (EXIF/GPS) stripped.
 
 📖 **Documentation:** [nera.js.org](https://nera.js.org)
