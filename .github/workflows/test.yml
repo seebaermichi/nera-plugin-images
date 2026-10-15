@@ -13,9 +13,10 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                # Node 18 is deliberately absent: cheerio pulls in `undici`,
-                # which needs a global `File` (Node 20+).
-                node-version: [20, 22]
+                # Node 20 reached end of life on 2026-04-30, and the dev
+                # toolchain (vitest 5) needs Node 22.12 or later, so CI tests
+                # 22 and 24. `engines` is unchanged: a CI-only change.
+                node-version: [22, 24]
 
         steps:
             - uses: actions/checkout@v7
