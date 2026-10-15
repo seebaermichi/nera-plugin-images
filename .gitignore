@@ -33,3 +33,4 @@ build/
 
 # Test scratch directory
 .tmp/
+plans/
