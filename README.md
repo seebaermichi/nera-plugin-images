@@ -221,16 +221,18 @@ A folder that holds only Markdown photos is the safe case. On the field-test sit
 
 Variants live in `.nera-cache/images/` (`cache_dir`): `files/` holds the images, `manifest.json` what they were made from. A variant is encoded only when its file is missing, and file names carry a hash of the source and the settings, so URLs are stable across builds and safe to cache forever. Variants no build uses any more are pruned (`prune: true`).
 
-A cold build of a site with ~100 images takes a minute or more, because AVIF encoding is slow; a warm build adds well under a second. Keep the cache between CI runs:
+A cold build of a site with ~100 images takes a minute or more, because AVIF encoding is slow; a warm build adds well under a second. Keep the cache between CI runs. The deploy workflow `nera publish` generates (`@nera-static/nera` ≥ 1.22.0) already does; elsewhere, add:
 
 ```yaml
 # GitHub Actions, before `npm run build`
 - uses: actions/cache@v6
   with:
       path: .nera-cache
-      key: nera-images-${{ hashFiles('assets/**', 'theme/assets/**', 'config/images.yaml') }}
-      restore-keys: nera-images-
+      key: nera-cache-${{ hashFiles('assets/**', 'theme/assets/**', 'pages/**', 'config/images.yaml', 'package-lock.json') }}
+      restore-keys: nera-cache-
 ```
+
+The key covers `pages/**` because pages ask for variants (query parameters, frontmatter images), and `package-lock.json` because a theme from npm brings its own images. `actions/cache` saves nothing when the key matches exactly, so a key that misses one of these leaves new variants unsaved, and every build encodes them again.
 
 ```yaml
 # GitLab CI, in the build job

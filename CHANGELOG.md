@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-11-18
+
+### Changed
+
+-   README "Cache and CI": the GitHub Actions snippet's cache key also covers `pages/**` and `package-lock.json`, so variants that pages or an npm theme ask for are saved too, and the section says that the deploy workflow of `nera publish` (`@nera-static/nera` 1.22.0) already caches `.nera-cache`.
+
 ## [1.0.2] - 2026-10-11
 
 ### Changed
